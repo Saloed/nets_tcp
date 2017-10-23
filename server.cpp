@@ -159,7 +159,7 @@ int server_main(int server_d) {
 void list_clients() {
     std::stringstream out_string;
     out_string << "Clients connected:\n";
-    for (auto[client_id, client]: clients) {
+    for (auto&&[client_id, client]: clients) {
         out_string << "id: " << client_id << " " << socket_info(client.addr) << "\n";
     }
     std::cout << out_string.str() << std::endl;
