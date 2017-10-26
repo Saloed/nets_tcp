@@ -10,8 +10,8 @@ namespace socket_utils {
         }
 
         flags |= O_NONBLOCK;
-        auto &&s = fcntl(sock, F_SETFL, flags);
-        if (s == -1) {
+        auto &&stat = fcntl(sock, F_SETFL, flags);
+        if (stat == -1) {
             Logger::logger->error("fcntl failed (F_SETFL)");
             return false;
         }
