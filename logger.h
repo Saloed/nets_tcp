@@ -1,7 +1,10 @@
-#pragma once
-
+#ifndef _LOGGER
+#define _LOGGER
 #include <spdlog/spdlog.h>
 
-namespace Logger{
-    auto&& logger = spdlog::basic_logger_mt("server_logger", "server_log.txt");
-}
+class Logger {
+public:
+    static std::shared_ptr<spdlog::logger> logger_inst;
+
+};
+#endif

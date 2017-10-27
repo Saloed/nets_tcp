@@ -1,234 +1,185 @@
-#include <netinet/in.h>
-#include <arpa/inet.h>
-#include <memory.h>
-#include <iostream>
-#include <list>
-#include <thread>
-#include <unistd.h>
-#include <mutex>
-#include <atomic>
 #include <sstream>
-#include <unordered_map>
-#include "defines.h"
-#include "utils.h"
+#include "server.h"
+#include "logger.h"
+#include "sockutils.h"
 
-std::mutex clients_mutex;
-volatile std::atomic_bool terminate;
-
-class Client {
-public:
-    Client() = default;
-    Client(int sock, const sockaddr_in &addr) : sock(sock), active(true), addr(addr) {}
-
-    void shutdown() {
-        active = false;
-        ::shutdown(sock, 2);
-        close(sock);
-    }
-
-    void deactivate() {
-        active = false;
-    }
-
-public:
-    int sock;
-    bool active;
-    sockaddr_in addr;
-};
-
-std::unordered_map<int, Client> clients;
-std::unordered_map<int, std::thread> workers;
-
-void handle_client(int client_id) {
-    auto&& client = clients[client_id];
-    char message[MESSAGE_SIZE];
-    while (!terminate && client.active) {
-        bzero(message, MESSAGE_SIZE);
-        auto &&result_code = readn(client.sock, message, sizeof(message));
-        if (result_code == ERROR_MESSAGE_SIZE || result_code == RECV_ERROR) break;
-        if (result_code == RECV_TIMEOUT) continue;
-        if (result_code == -1) break;
-        if (strcmp(message, "/disconnect") == 0) break;
-        if (send(client.sock, message, MESSAGE_SIZE, 0) == -1) {
-            std::cerr << "Error in send" << std::endl;
-            break;
-        }
-    }
-    client.shutdown();
-}
-
-
-
-std::string socket_info(sockaddr_in &client_info) {
-    std::string connected_ip = inet_ntoa(client_info.sin_addr);
-    int port = ntohs(client_info.sin_port);
-    return connected_ip + ":" + std::to_string(port);
-}
-
-
-void remove_disconnected() {
-    std::unique_lock<std::mutex> lock(clients_mutex);
-    std::stringstream out_string;
-    auto &&it = clients.begin();
-    while (it != clients.end()) {
-        if (it->second.active) {
-            ++it;
-            continue;
-        }
-        auto&& client_id = it->first;
-        auto&& client_addr = it->second.addr;
-
-        auto&& worker = workers[client_id];
-        if(worker.joinable()) worker.join();
-        it = clients.erase(it);
-        workers.erase(client_id);
-        out_string << "disconnected id: " << client_id << " " << socket_info(client_addr) << "\n";
-    }
-    lock.unlock();
-    std::cout << out_string.str() << std::flush;
-}
-
-int get_id_for_client() {
-    int id = 0;
-    int border = (clients.size() + 1) * 2;
-    do {
-        id = std::rand() % border;
-    } while (clients.find(id) != clients.end());
-    return id;
-}
-
-void accept_new_client(int server_d) {
-    sockaddr_in clientaddr{};
-    socklen_t addrlen = sizeof(clientaddr);
-    fd_set server_descriptor_set{};
-    FD_ZERO(&server_descriptor_set);
-    FD_SET(server_d, &server_descriptor_set);
-    timeval timeout{0, 1000};
-    int select_res = select(server_d + 1, &server_descriptor_set, nullptr, nullptr, &timeout);
-    if (select_res < 0) {
-        std::cerr << "Error in select" << std::endl;
-        terminate = true;
-    }
-    if (select_res == 0 || !FD_ISSET(server_d, &server_descriptor_set)) {
-        return;
-    }
-    int client_d = accept(server_d, (struct sockaddr *) &clientaddr, &addrlen);
-    if (client_d == -1) {
-        std::cerr << "Error in accept" << std::endl;
-        terminate = true;
-    } else {
-        std::unique_lock<std::mutex> lock(clients_mutex);
-        struct timeval tv{2, 0};
-        setsockopt(client_d, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(timeval));
-        auto &&id = get_id_for_client();
-        clients[id] = Client(client_d, clientaddr);
-        workers[id] = std::thread(handle_client, id);
-        lock.unlock();
-        std::string client_info = inet_ntoa(clientaddr.sin_addr);
-        std::cout << "New connection from " << client_info << " on socket " << client_d << std::endl;
-    }
-}
-
-
-bool disconnect_by_id(int id) {
-    auto &&client = clients.find(id);
-    if (client == clients.end()) {
-        return false;
-    }
-    client->second.deactivate();
-}
-
-int disconnect_all() {
-    for (auto&&[client_id, client]: clients) {
-        client.deactivate();
-    }
-    return 0;
-}
-
-int server_main(int server_d) {
-    while (!terminate) {
-        accept_new_client(server_d);
-        remove_disconnected();
-    }
-
-    disconnect_all();
-    remove_disconnected();
-    return 0;
-}
-
-void list_clients() {
-    std::stringstream out_string;
-    out_string << "Clients connected:\n";
-    for (auto&&[client_id, client]: clients) {
-        out_string << "id: " << client_id << " " << socket_info(client.addr) << "\n";
-    }
-    std::cout << out_string.str() << std::endl;
-}
-
-void help() {
-    std::stringstream out_string;
-
-    out_string << "help: print this help message\n";
-    out_string << "list: list connected clients\n";
-    out_string << "kill [id]: disconnect client with specified id\n";
-    out_string << "killall: disconnect all clients\n";
-    out_string << "shutdown: shutdown server\n";
-
-    std::cout << out_string.str() << std::endl;
-}
-
-int main() {
-
-    sockaddr_in server_address{};
-    int server_d = socket(AF_INET, SOCK_STREAM, 0);
+void server::Server::create_server_socket() {
+    auto &&server_d = socket(AF_INET, SOCK_STREAM, 0);
     if (server_d < 0) {
-        std::cerr << "Cannot open socket" << std::endl;
-        exit(1);
+        Logger::logger_inst->error("Cannot open socket");
+        std::exit(1);
     }
-
     int enable_options = 1;
     setsockopt(server_d, SOL_SOCKET, SO_REUSEADDR, &enable_options, sizeof(enable_options));
 
+    sockaddr_in server_address{};
     bzero(&server_address, sizeof(server_address));
-
     server_address.sin_family = AF_INET;
     server_address.sin_addr.s_addr = INADDR_ANY;
     server_address.sin_port = htons(SERVER_PORT);
-
-    if (bind(server_d, reinterpret_cast<const sockaddr *>(&server_address), sizeof(server_address)) < 0) {
-        std::cerr << "Cannot bind" << std::endl;
-        exit(1);
+    auto &&bind_addr = reinterpret_cast<const sockaddr *>(&server_address);
+    auto &&bind_stat = bind(server_d, bind_addr, sizeof(server_address));
+    if (bind_stat < 0) {
+        Logger::logger_inst->error("Cannot bind");
+        std::exit(1);
     }
-    if (listen(server_d, 10) == -1) {
-        std::cerr << "Error while marking socket as listener" << std::endl;
-        exit(1);
+    if (!socket_utils::set_socket_nonblock(server_d)) {
+        Logger::logger_inst->error("Cannot set server socket nonblock");
+        std::exit(1);
     }
-    terminate = false;
-    std::thread server_thread(server_main, server_d);
+    auto &&listen_stat = listen(server_d, 2);
+    if (listen_stat == -1) {
+        Logger::logger_inst->error("set server socket listen error");
+        std::exit(1);
+    }
+    server_socket = server_d;
+}
 
-    std::cout << "Server started on port " << SERVER_PORT << std::endl;
+void server::Server::close_client(int client_d) {
+    auto &&client = clients[client_d];
+    clients.erase(client_d);
+    epoll_ctl(epoll_descriptor, EPOLL_CTL_DEL, client_d, &client.event);
+    close(client.descriptor);
+    client.is_active = false;
+    Logger::logger_inst->info("Client {} disconnected", client_d);
+}
 
-    std::string command;
+void server::Server::accept_client() {
+    sockaddr_in client_addr{};
+    auto &&client_addr_in = reinterpret_cast<sockaddr *>(&client_addr);
+    auto &&client_addr_len = static_cast<socklen_t>(sizeof(sockaddr));
+    auto &&client_d = accept(server_socket, client_addr_in, &client_addr_len);
+    if (client_d == -1) {
+        if (errno != EAGAIN && errno != EWOULDBLOCK) {
+            Logger::logger_inst->error("Accept failed");
+        }
+        return;
+    }
+    if (!socket_utils::set_socket_nonblock(client_d)) {
+        Logger::logger_inst->error("Cannot set client socket {} nonblock", client_d);
+        return;
+    }
+    epoll_event event{};
+    event.data.fd = client_d;
+    event.events = EPOLLIN;
+    auto &&ctl_stat = epoll_ctl(epoll_descriptor, EPOLL_CTL_ADD, client_d, &event);
+    if (ctl_stat == -1) {
+        Logger::logger_inst->error("epoll_ctl failed");
+        return;
+    }
+    std::string client_info = inet_ntoa(client_addr.sin_addr);
+    clients[client_d] = Client(client_d, event, client_info);
+    Logger::logger_inst->info("New connection from {} on socket {}", client_info, client_d);
+}
 
+void server::Server::read_client_data(int client_id) {
+    char read_buffer[MESSAGE_SIZE];
+    auto &&count = read(client_id, read_buffer, MESSAGE_SIZE);
+    if (count == -1 && errno == EAGAIN) return;
+    if (count == -1) Logger::logger_inst->error("Error in read for socket {}", client_id);
+    if (count <= 0) {
+        close_client(client_id);
+        return;
+    }
+    auto &&client = clients[client_id];
+    client.receive_buffer.append(read_buffer, static_cast<unsigned long>(count));
+}
+
+void server::Server::handle_client_if_possible(int client_id) {
+    auto &&client = clients[client_id];
+    auto &&message_end = client.receive_buffer.find(MESSAGE_END);
+    if (message_end != std::string::npos) {
+        auto &&message = client.receive_buffer.substr(0, message_end);
+        client.receive_buffer.erase(0, message_end + 3);
+        workers.enqueue(&Server::process_client_message, this, message, client_id);
+    }
+}
+
+void server::Server::process_client_message(std::string &message, int client_id) {
+    Logger::logger_inst->info(message);
+    if (message == "cmd:disconnect") {
+        close(client_id);
+        return;
+    }
+    auto &&to_send = message + MESSAGE_END;
+    auto &&send_stat = send(client_id, to_send.c_str(), to_send.length(), 0);
+    if (send_stat == -1) {
+        Logger::logger_inst->error("Error in send for id {}", client_id);
+    }
+}
+
+void server::Server::epoll_loop() {
+    epoll_descriptor = epoll_create(1);
+    if (epoll_descriptor == -1) {
+        Logger::logger_inst->error("Cannot create epoll descriptor");
+        std::exit(1);
+    }
+    epoll_event event{};
+    event.events = EPOLLIN;
+    event.data.fd = server_socket;
+    auto &&ctl_stat = epoll_ctl(epoll_descriptor, EPOLL_CTL_ADD, server_socket, &event);
+    if (ctl_stat == -1) {
+        Logger::logger_inst->error("epoll_ctl failed");
+        std::exit(1);
+    }
+    std::array<epoll_event, 10> events{};
+    Logger::logger_inst->info("Server started on port {}", SERVER_PORT);
     while (!terminate) {
-        std::getline(std::cin, command);
-        if (command == "help") help();
-        else if (command == "list") list_clients();
-        else if (command == "killall") disconnect_all();
-        else if (!command.compare(0, 4, "kill")) {
-            int client_id = std::stoi(command.substr(5));
-            disconnect_by_id(client_id);
-        } else if (command == "shutdown") {
-            terminate = true;
-            break;
+        auto &&event_cnt = epoll_wait(epoll_descriptor, events.data(), 10, 1000);
+        for (auto &&i = 0; i < event_cnt; ++i) {
+            auto &&evt = events[i];
+            if (evt.events & EPOLLERR) {
+                Logger::logger_inst->error("Epoll error for socket {}", evt.data.fd);
+                close_client(evt.data.fd);
+            }
+            if (evt.events & EPOLLHUP) {
+                Logger::logger_inst->info("client socket closed {}", evt.data.fd);
+                close_client(evt.data.fd);
+            }
+            if (evt.events & EPOLLIN) {
+                if (evt.data.fd == server_socket) accept_client();
+                else {
+                    read_client_data(evt.data.fd);
+                    handle_client_if_possible(evt.data.fd);
+                }
+            }
         }
     }
+}
 
-    shutdown(server_d, SHUT_RDWR);
-    close(server_d);
+void server::Server::stop() {
+    if (terminate) return;
+    terminate = true;
+    close(server_socket);
     if (server_thread.joinable()) {
         server_thread.join();
     }
-    std::cout << "server stopped" << std::endl;
-    return 0;
+}
+
+void server::Server::start() {
+    terminate = false;
+    server_thread = std::move(std::thread(&Server::epoll_loop, this));
+}
+
+bool server::Server::is_active() {
+    return !terminate;
+}
+
+void server::Server::close_client_by_id(int client_id) {
+    close(client_id);
+}
+
+void server::Server::close_all_clients() {
+    for(auto&&[client_id, client]: clients){
+        close(client_id);
+    }
+}
+
+std::string server::Server::list_clients() {
+    std::stringstream out_string;
+    out_string << "Clients connected:";
+    for (auto&&[client_id, client]: clients) {
+        out_string << "\nid: " << client_id << " " << client.client_ip_addr;
+    }
+    return out_string.str();
 }

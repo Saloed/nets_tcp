@@ -1,3 +1,4 @@
+#pragma once
 #define MESSAGE_SIZE 1024
 #define SERVER_PORT 7777
 #define MESSAGE_END "\r\n\r\n"
