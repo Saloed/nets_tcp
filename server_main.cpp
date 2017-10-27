@@ -24,8 +24,8 @@ int main(int argc, char **argv) {
         else if (command == "list") std::cout << server.list_clients() << std::endl;
         else if (command == "killall") server.close_all_clients();
         else if (!command.compare(0, 4, "kill")) {
-            int client_id = std::stoi(command.substr(5));
-            server.close_client_by_id(client_id);
+            auto&& client_id = std::stoi(command.substr(5));
+            server.close_client(client_id);
         } else if (command == "shutdown") {
             break;
         }

@@ -10,3 +10,4 @@ set(server_cls server.cpp server.h)
 set(finance_db FinanceDb.h FinanceDb.cpp)
 
 add_executable(server server_main.cpp defines.h sockutils.h ${logger} ${thread_pool} ${server_cls} ${finance_db})
+add_executable(client client.cpp)

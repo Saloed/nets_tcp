@@ -60,8 +60,6 @@ namespace server {
 
         void accept_client();
 
-        void close_client(int client_d);
-
         void read_client_data(int client_id);
 
         void handle_client_if_possible(int client_id);
@@ -77,7 +75,7 @@ namespace server {
 
         bool is_active();
 
-        void close_client_by_id(int client_id);
+        void close_client(int client_d);
 
         void close_all_clients();
 
@@ -86,6 +84,7 @@ namespace server {
     private:
         std::unordered_map<int, Client> clients;
         std::thread server_thread;
+        std::mutex clients_mutex;
         ThreadPool workers;
         volatile std::atomic_bool terminate;
         int server_socket;

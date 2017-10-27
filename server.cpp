@@ -36,11 +36,13 @@ void server::Server::create_server_socket() {
 }
 
 void server::Server::close_client(int client_d) {
+    std::unique_lock<std::mutex> lock(clients_mutex);
     auto &&client = clients[client_d];
     clients.erase(client_d);
     epoll_ctl(epoll_descriptor, EPOLL_CTL_DEL, client_d, &client.event);
     close(client.descriptor);
     client.is_active = false;
+    lock.unlock();
     Logger::logger_inst->info("Client {} disconnected", client_d);
 }
 
@@ -90,7 +92,7 @@ void server::Server::handle_client_if_possible(int client_id) {
     auto &&message_end = client.receive_buffer.find(MESSAGE_END);
     if (message_end != std::string::npos) {
         auto &&message = client.receive_buffer.substr(0, message_end);
-        client.receive_buffer.erase(0, message_end + 3);
+        client.receive_buffer.erase(0, message_end + strlen(MESSAGE_END));
         workers.enqueue(&Server::process_client_message, this, message, client_id);
     }
 }
@@ -98,7 +100,7 @@ void server::Server::handle_client_if_possible(int client_id) {
 void server::Server::process_client_message(std::string &message, int client_id) {
     Logger::logger_inst->info(message);
     if (message == "cmd:disconnect") {
-        close(client_id);
+        close_client(client_id);
         return;
     }
     auto &&to_send = message + MESSAGE_END;
@@ -115,7 +117,7 @@ void server::Server::epoll_loop() {
         std::exit(1);
     }
     epoll_event event{};
-    event.events = EPOLLIN;
+    event.events = EPOLLIN | EPOLLHUP;
     event.data.fd = server_socket;
     auto &&ctl_stat = epoll_ctl(epoll_descriptor, EPOLL_CTL_ADD, server_socket, &event);
     if (ctl_stat == -1) {
@@ -165,20 +167,18 @@ bool server::Server::is_active() {
     return !terminate;
 }
 
-void server::Server::close_client_by_id(int client_id) {
-    close(client_id);
-}
-
 void server::Server::close_all_clients() {
-    for(auto&&[client_id, client]: clients){
-        close(client_id);
+    auto &&it = std::begin(clients);
+    while (it != std::end(clients)) {
+        close_client(it->first);
+        it = std::begin(clients);
     }
 }
 
 std::string server::Server::list_clients() {
     std::stringstream out_string;
     out_string << "Clients connected:";
-    for (auto&&[client_id, client]: clients) {
+    for (auto && [client_id, client]: clients) {
         out_string << "\nid: " << client_id << " " << client.client_ip_addr;
     }
     return out_string.str();
