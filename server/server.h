@@ -10,8 +10,8 @@
 #include <sys/epoll.h>
 #include <arpa/inet.h>
 
-#include "thread_pool/ThreadPool.h"
-#include "defines.h"
+#include "../thread_pool/ThreadPool.h"
+#include "../shared/defines.h"
 
 namespace server {
     class Client {

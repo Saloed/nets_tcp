@@ -1,5 +1,5 @@
 #include "FinanceDb.h"
-#include "logger.h"
+#include "../../shared/logging/logger.h"
 
 std::tm parse_date(const std::string &date_str) {
     std::tm datetime = {};

@@ -1,7 +1,7 @@
 #include <sstream>
 #include "server.h"
-#include "logger.h"
-#include "sockutils.h"
+#include "../shared/logging/logger.h"
+#include "utils/sockutils.h"
 
 void server::Server::create_server_socket() {
     auto &&server_d = socket(AF_INET, SOCK_STREAM, 0);
