@@ -1,6 +1,6 @@
 #ifndef _SOCKET_UTILS
 #define _SOCKET_UTILS
-#include "../../shared/logging/logger.h"
+#include "logging/logger.h"
 
 namespace socket_utils {
     bool set_socket_nonblock(int &sock) {

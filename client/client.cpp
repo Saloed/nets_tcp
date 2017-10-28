@@ -3,7 +3,7 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <iostream>
-#include "../shared/defines.h"
+#include "defines.h"
 
 int receive_from_server(int server_socket, std::string &received) {
     char message_buf[MESSAGE_SIZE];

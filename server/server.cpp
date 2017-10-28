@@ -1,6 +1,6 @@
 #include <sstream>
 #include "server.h"
-#include "../shared/logging/logger.h"
+#include "logging/logger.h"
 #include "utils/sockutils.h"
 
 void server::Server::create_server_socket() {
