@@ -1,3 +1,6 @@
 [submodule "thread_pool"]
 	path = libs/thread_pool
 	url = git://github.com/progschj/ThreadPool.git
+[submodule "libs/json"]
+	path = libs/json
+	url = git@github.com:nlohmann/json.git
