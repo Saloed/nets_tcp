@@ -45,13 +45,19 @@ int main() {
 
     std::string in_str;
     std::string received;
+    std::string to_send;
 
     while(true) {
         in_str.clear();
+        to_send.clear();
         received.clear();
         std::cout << "Enter message: " << std::endl;
         std::getline(std::cin, in_str);
-        auto &&to_send = in_str + MESSAGE_END;
+        if(in_str[0] == '/'){
+            to_send = CMD_PREFIX + in_str.substr(1) + MESSAGE_END;
+        } else{
+            to_send = TXT_PREFIX + in_str + MESSAGE_END;
+        }
         if (send(server_socket, to_send.c_str(), to_send.length(), 0) == -1) {
             std::cerr << "Error in send" << std::endl;
             break;

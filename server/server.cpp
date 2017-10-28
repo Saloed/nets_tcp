@@ -37,6 +37,8 @@ void server::Server::create_server_socket() {
 
 void server::Server::close_client(int client_d) {
     std::unique_lock<std::mutex> lock(clients_mutex);
+    if(clients.find(client_d) == clients.end())
+        return;
     auto &&client = clients[client_d];
     clients.erase(client_d);
     epoll_ctl(epoll_descriptor, EPOLL_CTL_DEL, client_d, &client.event);
@@ -70,7 +72,9 @@ void server::Server::accept_client() {
         return;
     }
     std::string client_info = inet_ntoa(client_addr.sin_addr);
+    std::unique_lock<std::mutex> lock(clients_mutex);
     clients[client_d] = Client(client_d, event, client_info);
+    lock.unlock();
     Logger::logger_inst->info("New connection from {} on socket {}", client_info, client_d);
 }
 
@@ -97,18 +101,45 @@ void server::Server::handle_client_if_possible(int client_id) {
     }
 }
 
-void server::Server::process_client_message(std::string &message, int client_id) {
-    Logger::logger_inst->info(message);
-    if (message == "cmd:disconnect") {
-        close_client(client_id);
-        return;
-    }
-    auto &&to_send = message + MESSAGE_END;
-    auto &&send_stat = send(client_id, to_send.c_str(), to_send.length(), 0);
+
+void send_message(int client_id, std::string_view message){
+    auto &&send_stat = send(client_id, message.data(), message.length(), 0);
     if (send_stat == -1) {
         Logger::logger_inst->error("Error in send for id {}", client_id);
     }
 }
+
+
+void server::Server::process_client_message(std::string &message, int client_id) {
+    Logger::logger_inst->info(message);
+    std::string_view message_view(message);
+    if (message_view.compare(0, MESSAGE_PREFIX_LEN, CMD_PREFIX) == 0) {
+        message_view.remove_prefix(MESSAGE_PREFIX_LEN);
+        process_client_command(message_view, client_id);
+    } else if (message_view.compare(0, MESSAGE_PREFIX_LEN, TXT_PREFIX) == 0) {
+        message_view.remove_prefix(MESSAGE_PREFIX_LEN);
+        process_client_text(message_view, client_id);
+    } else {
+        Logger::logger_inst->error("Client {} Unknown message type: {}", client_id, message);
+        auto&& err_message = ERROR_PREFIX + std::string("Unknown message type");
+        send_message(client_id, err_message);
+    }
+}
+
+void server::Server::process_client_command(std::string_view command, int client_id) {
+    Logger::logger_inst->info("Command from client {}: {}", client_id, command.data());
+    if (command == "disconnect") {
+        close_client(client_id);
+    }
+}
+
+
+void server::Server::process_client_text(std::string_view text, int client_id) {
+    Logger::logger_inst->info("Text from client {}: {}", client_id, text.data());
+    auto &&to_send = std::string(text) + MESSAGE_END;
+    send_message(client_id, to_send);
+}
+
 
 void server::Server::epoll_loop() {
     epoll_descriptor = epoll_create(1);

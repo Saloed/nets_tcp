@@ -66,6 +66,10 @@ namespace server {
 
         void process_client_message(std::string &message, int client_id);
 
+        void process_client_command(std::string_view command, int client_id);
+
+        void process_client_text(std::string_view text, int client_id);
+
         void epoll_loop();
 
     public:
