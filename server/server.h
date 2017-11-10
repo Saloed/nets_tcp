@@ -20,7 +20,7 @@ namespace server {
             mutex = std::make_unique<std::mutex>();
         }
 
-        explicit Client(int descriptor, epoll_event &event, std::string& client_ip) :
+        explicit Client(int descriptor, epoll_event &event, std::string &client_ip) :
                 descriptor(descriptor), is_active(true), event(event), client_ip_addr(client_ip) {
             mutex = std::make_unique<std::mutex>();
         }
@@ -69,6 +69,8 @@ namespace server {
         void process_client_command(std::string_view command, int client_id);
 
         void process_client_text(std::string_view text, int client_id);
+
+        void process_client_json(std::string_view json_string, int client_id);
 
         void epoll_loop();
 

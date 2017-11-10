@@ -21,5 +21,5 @@ set(SERVER_SRC ${SERVER_SRC} ${DEFINES} ${FINANCE_DB_SRC} ${LOGGER_SRC} ${JSON_S
 
 add_executable(server server/server_main.cpp ${SERVER_SRC})
 
-set(CLIENT_SRC ${DEFINES})
+set(CLIENT_SRC ${DEFINES} client/client_defs.h)
 add_executable(client client/client.cpp ${CLIENT_SRC})

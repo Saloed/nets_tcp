@@ -2,6 +2,8 @@
 #include "server.h"
 #include "logging/logger.h"
 #include "utils/sockutils.h"
+#include "json/src/json.hpp"
+
 
 void server::Server::create_server_socket() {
     auto &&server_d = socket(AF_INET, SOCK_STREAM, 0);
@@ -37,7 +39,7 @@ void server::Server::create_server_socket() {
 
 void server::Server::close_client(int client_d) {
     std::unique_lock<std::mutex> lock(clients_mutex);
-    if(clients.find(client_d) == clients.end())
+    if (clients.find(client_d) == clients.end())
         return;
     auto &&client = clients[client_d];
     clients.erase(client_d);
@@ -102,7 +104,7 @@ void server::Server::handle_client_if_possible(int client_id) {
 }
 
 
-void send_message(int client_id, std::string_view message){
+void send_message(int client_id, std::string_view message) {
     auto &&send_stat = send(client_id, message.data(), message.length(), 0);
     if (send_stat == -1) {
         Logger::logger_inst->error("Error in send for id {}", client_id);
@@ -119,17 +121,13 @@ void server::Server::process_client_message(std::string &message, int client_id)
     } else if (message_view.compare(0, MESSAGE_PREFIX_LEN, TXT_PREFIX) == 0) {
         message_view.remove_prefix(MESSAGE_PREFIX_LEN);
         process_client_text(message_view, client_id);
+    } else if (message_view.compare(0, MESSAGE_PREFIX_LEN, JSON_PREFIX) == 0) {
+        message_view.remove_prefix(MESSAGE_PREFIX_LEN);
+        process_client_json(message_view, client_id);
     } else {
         Logger::logger_inst->error("Client {} Unknown message type: {}", client_id, message);
-        auto&& err_message = ERROR_PREFIX + std::string("Unknown message type");
+        auto &&err_message = ERROR_PREFIX + std::string("Unknown message type") + MESSAGE_END;
         send_message(client_id, err_message);
-    }
-}
-
-void server::Server::process_client_command(std::string_view command, int client_id) {
-    Logger::logger_inst->info("Command from client {}: {}", client_id, command.data());
-    if (command == "disconnect") {
-        close_client(client_id);
     }
 }
 
@@ -140,6 +138,95 @@ void server::Server::process_client_text(std::string_view text, int client_id) {
     send_message(client_id, to_send);
 }
 
+
+void process_add_currency(std::string &currency, int client_id) {
+    Logger::logger_inst->info("Client {} add currency {}", client_id, currency);
+    auto &&response = TXT_PREFIX + std::string("Successfully add currency ") + currency + MESSAGE_END;
+    send_message(client_id, response);
+}
+
+void process_add_currency_value(std::string &currency, double value, int client_id) {
+    Logger::logger_inst->info("Client {} add currency {} value {}", client_id, currency, value);
+    auto &&response = TXT_PREFIX + std::string("Successfully add value for currency ") + currency + MESSAGE_END;
+    send_message(client_id, response);
+}
+
+void process_del_currency(std::string &currency, int client_id) {
+    Logger::logger_inst->info("Client {} del currency {}", client_id, currency);
+    auto &&response = TXT_PREFIX + std::string("Successfully del currency ") + currency + MESSAGE_END;
+    send_message(client_id, response);
+}
+
+void process_list_all_currencies(int client_id) {
+    Logger::logger_inst->info("Client {} list all currencies", client_id);
+    nlohmann::json json_response = {
+            {"list",  {"a", "b", "c"}},
+            {"value", {
+                       {"a", "b"},
+                            {"c", "d"}
+                      }
+            },
+    };
+    auto &&response = JSON_PREFIX + json_response.dump() + MESSAGE_END;
+    send_message(client_id, response);
+}
+
+void process_currency_history(std::string &currency, int client_id) {
+    nlohmann::json json_response = {
+            {"history", {"a", "b", "c"}},
+            {"value",   {
+                         {"a", "b"},
+                              {"c", "d"}
+                        }
+            },
+    };
+    auto &&response = JSON_PREFIX + json_response.dump() + MESSAGE_END;
+    send_message(client_id, response);
+}
+
+void server::Server::process_client_command(std::string_view command, int client_id) {
+    Logger::logger_inst->info("Command from client {}: {}", client_id, command.data());
+    if (command == "disconnect") {
+        close_client(client_id);
+    } else if (command == REQUEST_GET_ALL_CURRENCIES) {
+        process_list_all_currencies(client_id);
+    } else {
+        Logger::logger_inst->error("Client {} Unknown command {}", client_id, command.data());
+        auto &&err_message = ERROR_PREFIX + std::string("Unknown command") + MESSAGE_END;
+        send_message(client_id, err_message);
+    }
+}
+
+
+void server::Server::process_client_json(std::string_view json_string, int client_id) {
+    Logger::logger_inst->info("Json from client {}: {}", client_id, json_string.data());
+    try {
+        auto &&client_json = nlohmann::json::parse(json_string);
+        std::string request_type = client_json["type"];
+        std::string currency = client_json["currency"];
+        if (request_type == REQUEST_ADD_CURRENCY) {
+            process_add_currency(currency, client_id);
+        } else if (request_type == REQUEST_ADD_CURRENCY_VALUE) {
+            double value = client_json["value"];
+            process_add_currency_value(currency, value, client_id);
+        } else if (request_type == REQUEST_DEL_CURRENCY) {
+            process_del_currency(currency, client_id);
+        } else if (request_type == REQUEST_GET_CURRENCY_HISTORY) {
+            process_currency_history(currency, client_id);
+        } else {
+            Logger::logger_inst->error("Client {} Unknown request type: {}", client_id, request_type);
+            auto &&err_message = ERROR_PREFIX + std::string("Unknown request type") + MESSAGE_END;
+            send_message(client_id, err_message);
+        }
+
+    } catch (nlohmann::json::parse_error &ex) {
+        Logger::logger_inst->error("{} client {} json {}", ex.what(), client_id, json_string.data());
+        auto &&err_message = ERROR_PREFIX + std::string("Incorrect json") + MESSAGE_END;
+        send_message(client_id, err_message);
+        return;
+    }
+
+}
 
 void server::Server::epoll_loop() {
     epoll_descriptor = epoll_create(1);
