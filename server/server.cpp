@@ -139,49 +139,77 @@ void server::Server::process_client_text(std::string_view text, int client_id) {
 }
 
 
-void process_add_currency(std::string &currency, int client_id) {
+void server::Server::process_add_currency(std::string &currency, int client_id) {
     Logger::logger_inst->info("Client {} add currency {}", client_id, currency);
-    auto &&response = TXT_PREFIX + std::string("Successfully add currency ") + currency + MESSAGE_END;
-    send_message(client_id, response);
+    auto &&status = database.add_currency(currency);
+    if (status == 0) {
+        auto &&response = TXT_PREFIX + std::string("Successfully add currency ") + currency + MESSAGE_END;
+        send_message(client_id, response);
+    } else if (status == 1) {
+        auto &&err_message = ERROR_PREFIX + std::string("Currency already exists: ") + currency + MESSAGE_END;
+        send_message(client_id, err_message);
+    } else {
+        auto &&err_message = ERROR_PREFIX + std::string("Database error") + MESSAGE_END;
+        send_message(client_id, err_message);
+    }
 }
 
-void process_add_currency_value(std::string &currency, double value, int client_id) {
+void server::Server::process_add_currency_value(std::string &currency, double value, int client_id) {
     Logger::logger_inst->info("Client {} add currency {} value {}", client_id, currency, value);
-    auto &&response = TXT_PREFIX + std::string("Successfully add value for currency ") + currency + MESSAGE_END;
-    send_message(client_id, response);
+    auto &&status = database.add_currency_value(currency, value);
+    if (status == 0) {
+        auto &&response = TXT_PREFIX + std::string("Successfully add value for currency ") + currency + MESSAGE_END;
+        send_message(client_id, response);
+    } else if (status == 1) {
+        auto &&err_message = ERROR_PREFIX + std::string("No such currency ") + currency + MESSAGE_END;
+        send_message(client_id, err_message);
+    } else {
+        auto &&err_message = ERROR_PREFIX + std::string("Database error") + MESSAGE_END;
+        send_message(client_id, err_message);
+    }
 }
 
-void process_del_currency(std::string &currency, int client_id) {
+void server::Server::process_del_currency(std::string &currency, int client_id) {
     Logger::logger_inst->info("Client {} del currency {}", client_id, currency);
-    auto &&response = TXT_PREFIX + std::string("Successfully del currency ") + currency + MESSAGE_END;
-    send_message(client_id, response);
+    auto &&status = database.del_currency(currency);
+    if (status == 0) {
+        auto &&response = TXT_PREFIX + std::string("Successfully del currency ") + currency + MESSAGE_END;
+        send_message(client_id, response);
+    } else if (status == 1) {
+        auto &&err_message = ERROR_PREFIX + std::string("No such currency ") + currency + MESSAGE_END;
+        send_message(client_id, err_message);
+    } else {
+        auto &&err_message = ERROR_PREFIX + std::string("Database error") + MESSAGE_END;
+        send_message(client_id, err_message);
+    }
 }
 
-void process_list_all_currencies(int client_id) {
+void server::Server::process_list_all_currencies(int client_id) {
     Logger::logger_inst->info("Client {} list all currencies", client_id);
-    nlohmann::json json_response = {
-            {"list",  {"a", "b", "c"}},
-            {"value", {
-                       {"a", "b"},
-                            {"c", "d"}
-                      }
-            },
-    };
-    auto &&response = JSON_PREFIX + json_response.dump() + MESSAGE_END;
-    send_message(client_id, response);
+    nlohmann::json json_response;
+    auto &&status = database.currency_list(json_response);
+    if (status == 0) {
+        auto &&response = JSON_PREFIX + json_response.dump() + MESSAGE_END;
+        send_message(client_id, response);
+    } else {
+        auto &&err_message = ERROR_PREFIX + std::string("Database error") + MESSAGE_END;
+        send_message(client_id, err_message);
+    }
 }
 
-void process_currency_history(std::string &currency, int client_id) {
-    nlohmann::json json_response = {
-            {"history", {"a", "b", "c"}},
-            {"value",   {
-                         {"a", "b"},
-                              {"c", "d"}
-                        }
-            },
-    };
-    auto &&response = JSON_PREFIX + json_response.dump() + MESSAGE_END;
-    send_message(client_id, response);
+void server::Server::process_currency_history(std::string &currency, int client_id) {
+    nlohmann::json json_response;
+    auto &&status = database.currency_history(currency, json_response);
+    if (status == 0) {
+        auto &&response = JSON_PREFIX + json_response.dump() + MESSAGE_END;
+        send_message(client_id, response);
+    } else if (status == 1) {
+        auto &&err_message = ERROR_PREFIX + std::string("No such currency ") + currency + MESSAGE_END;
+        send_message(client_id, err_message);
+    } else {
+        auto &&err_message = ERROR_PREFIX + std::string("Database error") + MESSAGE_END;
+        send_message(client_id, err_message);
+    }
 }
 
 void server::Server::process_client_command(std::string_view command, int client_id) {

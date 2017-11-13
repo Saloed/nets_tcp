@@ -48,6 +48,18 @@ std::string parse_response(std::string &basic_string) {
     return basic_string;
 }
 
+
+std::string help_message() {
+    std::stringstream message;
+    message << "/add [currency] : add new currency\n"
+            << "/addv [currency] [value] : add new value to currency\n"
+            << "/del [currency] : remove currency\n"
+            << "/all : list all currencies\n"
+            << "/hist [currency] : history for currency";
+    return message.str();
+}
+
+
 int main() {
     sockaddr_in server_addr{};
     auto &&server_socket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
@@ -83,6 +95,11 @@ int main() {
                 continue;
             }
             auto &&cmd = tokens[0];
+
+            if (cmd == "help") {
+                std::cout << help_message() << std::endl;
+                continue;
+            }
 
             if (cmd == ADD_CURRENCY_CMD ||
                 cmd == DEL_CURRENCY_CMD ||

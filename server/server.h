@@ -11,6 +11,7 @@
 #include <arpa/inet.h>
 
 #include "thread_pool/ThreadPool.h"
+#include "database/FinanceDb.h"
 #include "defines.h"
 
 namespace server {
@@ -47,7 +48,7 @@ namespace server {
     class Server {
 
     public:
-        Server() : server_socket(-1), epoll_descriptor(-1), terminate(false), workers(4) {
+        Server() : server_socket(-1), epoll_descriptor(-1), terminate(false), workers(4), database() {
             create_server_socket();
         }
 
@@ -72,6 +73,16 @@ namespace server {
 
         void process_client_json(std::string_view json_string, int client_id);
 
+        void process_add_currency(std::string &currency, int client_id);
+
+        void process_add_currency_value(std::string &currency, double value, int client_id);
+
+        void process_del_currency(std::string &currency, int client_id);
+
+        void process_list_all_currencies(int client_id);
+
+        void process_currency_history(std::string &currency, int client_id);
+
         void epoll_loop();
 
     public:
@@ -92,10 +103,10 @@ namespace server {
         std::thread server_thread;
         std::mutex clients_mutex;
         ThreadPool workers;
+        FinanceDb database;
         volatile std::atomic_bool terminate;
         int server_socket;
         int epoll_descriptor;
-
     };
 };
 
