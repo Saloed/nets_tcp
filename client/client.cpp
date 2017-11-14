@@ -1,23 +1,28 @@
-#include <unistd.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
+#define WIN32_LEAN_AND_MEAN
+
+#include <windows.h>
+#include <winsock2.h>
+#include <ws2tcpip.h>
+
+#pragma comment (lib, "Ws2_32.lib")
+#pragma comment (lib, "Mswsock.lib")
+#pragma comment (lib, "AdvApi32.lib")
+
 #include <iostream>
-#include <cstring>
 #include "json/src/json.hpp"
 #include "defines.h"
 #include "client_defs.h"
 
-int receive_from_server(int server_socket, std::string &received) {
+int receive_from_server(SOCKET server_socket, std::string &received) {
     char message_buf[MESSAGE_SIZE];
     while (true) {
-        auto &&count = read(server_socket, message_buf, MESSAGE_SIZE);
+        auto &&count = recv(server_socket, message_buf, MESSAGE_SIZE, 0);
         if (count == 0) {
             std::cerr << "socket closed" << std::endl;
             return -1;
         }
         if (count < 0) {
-            std::cerr << "socket error" << std::endl;
+            std::cerr << "socket error " << WSAGetLastError() << std::endl;
             return -1;
         }
         received.append(message_buf, count);
@@ -59,23 +64,44 @@ std::string help_message() {
     return message.str();
 }
 
-
 int main() {
-    sockaddr_in server_addr{};
-    auto &&server_socket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-    if (server_socket == -1) {
-        std::cerr << "Error in socket creation" << std::endl;
-        exit(1);
+
+    WSADATA wsa_data{0};
+
+    auto &&startup_status = WSAStartup(MAKEWORD(2, 2), &wsa_data);
+    if (startup_status != 0) {
+        std::cerr << "WSAStartup failed with error code " << startup_status << std::endl;
+        std::exit(1);
     }
-    server_addr.sin_family = AF_INET;
-    server_addr.sin_addr.s_addr = inet_addr("127.0.0.1");
-    server_addr.sin_port = htons(SERVER_PORT);
-    auto &&server_sockaddr = reinterpret_cast<const sockaddr *>(&server_addr);
-    auto &&conn_status = connect(server_socket, server_sockaddr, sizeof(sockaddr));
-    if (conn_status < 0) {
-        std::cerr << "Error in connection" << std::endl;
-        exit(1);
+
+    addrinfo *result = nullptr;
+    addrinfo hints{};
+    ZeroMemory(&hints, sizeof(hints));
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+    hints.ai_protocol = IPPROTO_TCP;
+
+    auto &&getaddr_status = getaddrinfo("192.168.1.73", "7777", &hints, &result);
+    if (getaddr_status != 0) {
+        std::cerr << "Getaddr failed with status " << getaddr_status << std::endl;
+        WSACleanup();
+        std::exit(2);
     }
+
+    auto &&server_socket = socket(result->ai_family, result->ai_socktype, result->ai_protocol);
+    if (server_socket == INVALID_SOCKET) {
+        std::cerr << "Socket creation failed with status " << WSAGetLastError() << std::endl;
+        WSACleanup();
+        std::exit(3);
+    }
+
+    auto &&connect_status = connect(server_socket, result->ai_addr, static_cast<int>(result->ai_addrlen));
+    if (connect_status == SOCKET_ERROR) {
+        std::cerr << "Connection to server failed with status " << WSAGetLastError() << std::endl;
+        WSACleanup();
+        std::exit(4);
+    }
+    freeaddrinfo(result);
 
     std::string in_str;
     std::string received;
@@ -150,5 +176,6 @@ int main() {
         std::cout << "Received: " << response << std::endl;
     }
 
-    close(server_socket);
+    closesocket(server_socket);
+    WSACleanup();
 }
