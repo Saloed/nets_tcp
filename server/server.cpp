@@ -1,40 +1,49 @@
 #include <sstream>
 #include "server.h"
 #include "logging/logger.h"
-#include "utils/sockutils.h"
 #include "json/src/json.hpp"
 
 
 void server::Server::create_server_socket() {
-    auto &&server_d = socket(AF_INET, SOCK_STREAM, 0);
-    if (server_d < 0) {
-        Logger::logger_inst->error("Cannot open socket");
-        std::exit(1);
-    }
-    int enable_options = 1;
-    setsockopt(server_d, SOL_SOCKET, SO_REUSEADDR, &enable_options, sizeof(enable_options));
+    WSADATA wsa{};
+    auto init_status = WSAStartup(MAKEWORD(2,2),&wsa);
 
-    sockaddr_in server_address{};
-    bzero(&server_address, sizeof(server_address));
-    server_address.sin_family = AF_INET;
-    server_address.sin_addr.s_addr = INADDR_ANY;
-    server_address.sin_port = htons(SERVER_PORT);
-    auto &&bind_addr = reinterpret_cast<const sockaddr *>(&server_address);
-    auto &&bind_stat = bind(server_d, bind_addr, sizeof(server_address));
-    if (bind_stat < 0) {
-        Logger::logger_inst->error("Cannot bind");
-        std::exit(1);
+    if (init_status != 0) {
+        Logger::logger_inst->error("WSA init failed with code {}", WSAGetLastError());
+        std::exit(EXIT_FAILURE);
     }
-    if (!socket_utils::set_socket_nonblock(server_d)) {
-        Logger::logger_inst->error("Cannot set server socket nonblock");
-        std::exit(1);
+    auto server_d = socket(AF_INET , SOCK_DGRAM , IPPROTO_UDP );
+    if(server_d == INVALID_SOCKET){
+        Logger::logger_inst->error("Error in socket creation {}", WSAGetLastError());
+        std::exit(EXIT_FAILURE);
     }
-    auto &&listen_stat = listen(server_d, 2);
-    if (listen_stat == -1) {
-        Logger::logger_inst->error("set server socket listen error");
-        std::exit(1);
+    BOOL fFlag = TRUE;
+    auto nRet = setsockopt(server_d,SOL_SOCKET,
+                           SO_REUSEADDR, (char *)&fFlag, sizeof(fFlag));
+    if (nRet == SOCKET_ERROR)
+    {
+        printf ("setsockopt() SO_REUSEADDR failed, Err: %d\n",WSAGetLastError());
     }
+    sockaddr_in server{};
+    server.sin_family = AF_INET;
+    server.sin_addr.s_addr = INADDR_ANY;
+    server.sin_port = htons( SERVER_PORT );
+
+    auto bind_status = bind(server_d , (sockaddr *)&server , sizeof(sockaddr_in));
+    if(bind_status == SOCKET_ERROR){
+        Logger::logger_inst->error("Error in socket bind {}", WSAGetLastError());
+        std::exit(EXIT_FAILURE);
+    }
+
     server_socket = server_d;
+    read_event_d = CreateEvent(NULL, TRUE, TRUE, "ReadEvent");
+    completion_port = CreateIoCompletionPort (INVALID_HANDLE_VALUE, NULL, 0, 1);
+    if(!completion_port){
+        Logger::logger_inst->error("Error in completion port creation");
+        std::exit(EXIT_FAILURE);
+    }
+    CreateIoCompletionPort((HANDLE)server_d, completion_port, (DWORD)server_d, 2);
+    Logger::logger_inst->info("Server initialized");
 }
 
 void server::Server::close_client(int client_d) {
@@ -43,46 +52,38 @@ void server::Server::close_client(int client_d) {
         return;
     auto &&client = clients[client_d];
     clients.erase(client_d);
-    epoll_ctl(epoll_descriptor, EPOLL_CTL_DEL, client_d, &client.event);
-    close(client.descriptor);
+    closesocket(client.descriptor);
     client.is_active = false;
     lock.unlock();
     Logger::logger_inst->info("Client {} disconnected", client_d);
 }
 
 void server::Server::accept_client() {
-    sockaddr_in client_addr{};
-    auto &&client_addr_in = reinterpret_cast<sockaddr *>(&client_addr);
-    auto &&client_addr_len = static_cast<socklen_t>(sizeof(sockaddr));
-    auto &&client_d = accept(server_socket, client_addr_in, &client_addr_len);
-    if (client_d == -1) {
-        if (errno != EAGAIN && errno != EWOULDBLOCK) {
-            Logger::logger_inst->error("Accept failed");
-        }
-        return;
-    }
-    if (!socket_utils::set_socket_nonblock(client_d)) {
-        Logger::logger_inst->error("Cannot set client socket {} nonblock", client_d);
-        return;
-    }
-    epoll_event event{};
-    event.data.fd = client_d;
-    event.events = EPOLLIN;
-    auto &&ctl_stat = epoll_ctl(epoll_descriptor, EPOLL_CTL_ADD, client_d, &event);
-    if (ctl_stat == -1) {
-        Logger::logger_inst->error("epoll_ctl failed");
-        return;
-    }
-    std::string client_info = inet_ntoa(client_addr.sin_addr);
-    std::unique_lock<std::mutex> lock(clients_mutex);
-    clients[client_d] = Client(client_d, event, client_info);
-    lock.unlock();
-    Logger::logger_inst->info("New connection from {} on socket {}", client_info, client_d);
+//    sockaddr_in client_addr{};
+//    auto &&client_addr_in = reinterpret_cast<sockaddr *>(&client_addr);
+//    auto &&client_addr_len = static_cast<socklen_t>(sizeof(sockaddr));
+//    auto &&client_d = accept(server_socket, client_addr_in, &client_addr_len);
+//    if (client_d == -1) {
+//        if (errno != EAGAIN && errno != EWOULDBLOCK) {
+//            Logger::logger_inst->error("Accept failed");
+//        }
+//        return;
+//    }
+//    if (!socket_utils::set_socket_nonblock(client_d)) {
+//        Logger::logger_inst->error("Cannot set client socket {} nonblock", client_d);
+//        return;
+//    }
+//
+//    std::string client_info = inet_ntoa(client_addr.sin_addr);
+//    std::unique_lock<std::mutex> lock(clients_mutex);
+//    clients[client_d] = Client(client_d, event, client_info);
+//    lock.unlock();
+//    Logger::logger_inst->info("New connection from {} on socket {}", client_info, client_d);
 }
 
 void server::Server::read_client_data(int client_id) {
     char read_buffer[MESSAGE_SIZE];
-    auto &&count = read(client_id, read_buffer, MESSAGE_SIZE);
+    auto &&count = 0; //read(client_id, read_buffer, MESSAGE_SIZE);
     if (count == -1 && errno == EAGAIN) return;
     if (count == -1) Logger::logger_inst->error("Error in read for socket {}", client_id);
     if (count <= 0) {
@@ -256,41 +257,53 @@ void server::Server::process_client_json(std::string_view json_string, int clien
 
 }
 
-void server::Server::epoll_loop() {
-    epoll_descriptor = epoll_create(1);
-    if (epoll_descriptor == -1) {
-        Logger::logger_inst->error("Cannot create epoll descriptor");
-        std::exit(1);
+void server::Server::handle_client_datagram(DWORD client_socket, BYTE *receive_buffer, DWORD length){
+    receive_buffer[length] = '\0';
+    std::string message((char *) receive_buffer);
+    Logger::logger_inst -> info("Received {} : {}", client_socket, message);
+    if(clients.find(client_socket) == std::end(clients)){
+        clients[client_socket] = Client(client_socket, "");
     }
-    epoll_event event{};
-    event.events = EPOLLIN | EPOLLHUP;
-    event.data.fd = server_socket;
-    auto &&ctl_stat = epoll_ctl(epoll_descriptor, EPOLL_CTL_ADD, server_socket, &event);
-    if (ctl_stat == -1) {
-        Logger::logger_inst->error("epoll_ctl failed");
-        std::exit(1);
-    }
-    std::array<epoll_event, 10> events{};
+
+}
+
+void server::Server::serve_loop() {
     Logger::logger_inst->info("Server started on port {}", SERVER_PORT);
+    DWORD client_socket;
+    LPOVERLAPPED lpo;
+    DWORD bytes_received;
+    DWORD bytes_to_receive;
+    BYTE receive_buffer[MESSAGE_SIZE + 1];
+    OVERLAPPED initial_ol{};
+    initial_ol.hEvent = read_event_d;
+    initial_ol.Internal = 0;
+    initial_ol.InternalHigh = 0;
+    initial_ol.Offset = 0;
+    initial_ol.OffsetHigh = 0;
+    auto status = ReadFile ((HANDLE)server_socket, &receive_buffer, sizeof(receive_buffer), &bytes_received, &initial_ol);
+
     while (!terminate) {
-        auto &&event_cnt = epoll_wait(epoll_descriptor, events.data(), 10, 1000);
-        for (auto &&i = 0; i < event_cnt; ++i) {
-            auto &&evt = events[i];
-            if (evt.events & EPOLLERR) {
-                Logger::logger_inst->error("Epoll error for socket {}", evt.data.fd);
-                close_client(evt.data.fd);
+        std::memset(&receive_buffer, 0, MESSAGE_SIZE);
+        status = GetQueuedCompletionStatus(completion_port, &bytes_to_receive, &client_socket, &lpo, 2000);
+        Logger::logger_inst->info("loop {} {} {} {}", status, bytes_to_receive, client_socket, GetLastError());
+        if(!status) continue;
+
+        OVERLAPPED ol{};
+        ol.hEvent = read_event_d;
+        ol.Offset = 0;
+        ol.OffsetHigh = 0;
+
+        auto read_success = ReadFile ((HANDLE)client_socket, &receive_buffer, bytes_to_receive, &bytes_received, &ol);
+        if(!read_success){
+            DWORD err_code = GetLastError();
+            if(err_code == ERROR_IO_PENDING){
+                WaitForSingleObject(ol.hEvent, INFINITE);
+                handle_client_datagram(client_socket, receive_buffer, bytes_received);
+                continue;
             }
-            if (evt.events & EPOLLHUP) {
-                Logger::logger_inst->info("client socket closed {}", evt.data.fd);
-                close_client(evt.data.fd);
-            }
-            if (evt.events & EPOLLIN) {
-                if (evt.data.fd == server_socket) accept_client();
-                else {
-                    read_client_data(evt.data.fd);
-                    handle_client_if_possible(evt.data.fd);
-                }
-            }
+            Logger::logger_inst->error("Error in socket read {}", err_code);
+        } else {
+            handle_client_datagram(client_socket, receive_buffer, bytes_received);
         }
     }
 }
@@ -298,15 +311,16 @@ void server::Server::epoll_loop() {
 void server::Server::stop() {
     if (terminate) return;
     terminate = true;
-    close(server_socket);
+    closesocket(server_socket);
     if (server_thread.joinable()) {
         server_thread.join();
     }
+    WSACleanup();
 }
 
 void server::Server::start() {
     terminate = false;
-    server_thread = std::move(std::thread(&Server::epoll_loop, this));
+    server_thread = std::move(std::thread(&Server::serve_loop, this));
 }
 
 bool server::Server::is_active() {
@@ -324,7 +338,9 @@ void server::Server::close_all_clients() {
 std::string server::Server::list_clients() {
     std::stringstream out_string;
     out_string << "Clients connected:";
-    for (auto && [client_id, client]: clients) {
+    for (auto && entry: clients) {
+        auto&& client_id = entry.first;
+        auto&& client = entry.second;
         out_string << "\nid: " << client_id << " " << client.client_ip_addr;
     }
     return out_string.str();

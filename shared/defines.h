@@ -1,5 +1,5 @@
 #pragma once
-#define MESSAGE_SIZE 1024
+#define MESSAGE_SIZE 512
 #define SERVER_PORT 7777
 
 // message

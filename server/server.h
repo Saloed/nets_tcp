@@ -6,23 +6,25 @@
 #include <unordered_map>
 #include <memory>
 #include <atomic>
-#include <netinet/in.h>
-#include <sys/epoll.h>
-#include <arpa/inet.h>
+
+#include<winsock2.h>
+#pragma comment(lib,"ws2_32.lib")
 
 #include "thread_pool/ThreadPool.h"
 #include "database/FinanceDb.h"
 #include "defines.h"
 
+typedef int epoll_event;
+
 namespace server {
     class Client {
     public:
-        Client() : descriptor(-1), is_active(false), event{} {
+        Client() : descriptor(0), is_active(false) {
             mutex = std::make_unique<std::mutex>();
         }
 
-        explicit Client(int descriptor, epoll_event &event, std::string &client_ip) :
-                descriptor(descriptor), is_active(true), event(event), client_ip_addr(client_ip) {
+        explicit Client(SOCKET descriptor, std::string &client_ip) :
+                descriptor(descriptor), is_active(true), client_ip_addr(client_ip) {
             mutex = std::make_unique<std::mutex>();
         }
 
@@ -32,14 +34,15 @@ namespace server {
                 is_active = other.is_active.load();
                 mutex = std::move(other.mutex);
                 receive_buffer = std::move(other.receive_buffer);
+                send_buffer = std::move(other.send_buffer);
             }
             return *this;
         }
 
-        int descriptor;
-        epoll_event event;
+        SOCKET descriptor;
         volatile std::atomic_bool is_active;
-        std::string receive_buffer;
+        std::vector<std::string> send_buffer;
+        std::vector<std::string> receive_buffer;
         std::string client_ip_addr;
         std::unique_ptr<std::mutex> mutex;
     };
@@ -48,7 +51,8 @@ namespace server {
     class Server {
 
     public:
-        Server() : server_socket(-1), epoll_descriptor(-1), terminate(false), workers(4), database() {
+        Server() : server_socket(0), terminate(false), workers(4), database(),
+                   read_event_d{}, completion_port{} {
             create_server_socket();
         }
 
@@ -83,7 +87,7 @@ namespace server {
 
         void process_currency_history(std::string &currency, int client_id);
 
-        void epoll_loop();
+        void serve_loop();
 
     public:
         void stop();
@@ -99,14 +103,17 @@ namespace server {
         std::string list_clients();
 
     private:
-        std::unordered_map<int, Client> clients;
+        std::unordered_map<DWORD, Client> clients;
         std::thread server_thread;
         std::mutex clients_mutex;
         ThreadPool workers;
         FinanceDb database;
         volatile std::atomic_bool terminate;
-        int server_socket;
-        int epoll_descriptor;
+        SOCKET server_socket;
+        HANDLE read_event_d;
+        HANDLE completion_port;
+
+        void handle_client_datagram(DWORD client_socket, BYTE *receive_buffer, DWORD length);
     };
 };
 

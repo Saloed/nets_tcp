@@ -4,3 +4,9 @@
 [submodule "libs/json"]
 	path = libs/json
 	url = git@github.com:nlohmann/json.git
+[submodule "libs/SQLiteCpp"]
+	path = libs/SQLiteCpp
+	url = git@github.com:SRombauts/SQLiteCpp.git
+[submodule "libs/spdlog"]
+	path = libs/spdlog
+	url = git@github.com:gabime/spdlog.git
