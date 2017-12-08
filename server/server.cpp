@@ -1,4 +1,5 @@
 #include <sstream>
+#include <WS2tcpip.h>
 #include "server.h"
 #include "logging/logger.h"
 #include "json/src/json.hpp"
@@ -18,11 +19,10 @@ void server::Server::create_server_socket() {
         std::exit(EXIT_FAILURE);
     }
     BOOL fFlag = TRUE;
-    auto nRet = setsockopt(server_d,SOL_SOCKET,
-                           SO_REUSEADDR, (char *)&fFlag, sizeof(fFlag));
-    if (nRet == SOCKET_ERROR)
-    {
-        printf ("setsockopt() SO_REUSEADDR failed, Err: %d\n",WSAGetLastError());
+    auto reuse_status = setsockopt(server_d,SOL_SOCKET, SO_REUSEADDR, (char *)&fFlag, sizeof(fFlag));
+    if (reuse_status == SOCKET_ERROR) {
+        Logger::logger_inst->error("Error in set socket reuse addr{}", WSAGetLastError());
+        std::exit(EXIT_FAILURE);
     }
     sockaddr_in server{};
     server.sin_family = AF_INET;
@@ -257,55 +257,93 @@ void server::Server::process_client_json(std::string_view json_string, int clien
 
 }
 
-void server::Server::handle_client_datagram(DWORD client_socket, BYTE *receive_buffer, DWORD length){
-    receive_buffer[length] = '\0';
-    std::string message((char *) receive_buffer);
-    Logger::logger_inst -> info("Received {} : {}", client_socket, message);
-    if(clients.find(client_socket) == std::end(clients)){
-        clients[client_socket] = Client(client_socket, "");
+void server::Server::client_message_chunk(sockaddr_storage client_info, int chunk_number, int total, std::string& message){
+
+}
+
+void server::Server::refresh_client_timeout(sockaddr_storage client_info){
+
+}
+
+void server::Server::client_message_status(sockaddr_storage client_info, int chunk_number, int status){
+
+}
+
+
+int get_id_for_client_info(sockaddr_in client_info){
+    client_info.sin_addr
+}
+
+
+void server::Server::handle_client_datagram(WSAEVENT event){
+    WSANETWORKEVENTS network_events{};
+    sockaddr_storage client_info{};
+    socklen_t client_info_size = sizeof(sockaddr_storage);
+    char receive_buffer[MESSAGE_SIZE + 1];
+    WSAEnumNetworkEvents(server_socket, event, &network_events);
+    auto bytes = recvfrom(server_socket, receive_buffer, MESSAGE_SIZE, 0,
+                     (sockaddr*) &client_info, &client_info_size);
+
+    if(bytes < 0){
+        auto err_code = GetLastError();
+        if(err_code == WSAECONNRESET) return;
+        Logger::logger_inst->error("Error in recv {}", err_code);
+        terminate = true;
     }
+
+    if(bytes == 0){
+        workers.enqueue(&Server::refresh_client_timeout, this, client_info);
+        return;
+    }
+    char message_type = receive_buffer[0];
+    if(message_type == CHUNK_REQUEST_MESSAGE || message_type == CHUNK_SUCCESS_MESSAGE){
+        int message_number = *(int *)(receive_buffer + 1);
+        workers.enqueue(&Server::client_message_status, this, client_info, message_number, message_type);
+        return;
+    } else if (message_type == CONTENT_MESSAGE) {
+        auto * as_int_array = (int *)(receive_buffer + 1);
+        int message_number = as_int_array[0];
+        int message_total  = as_int_array[1];
+        receive_buffer[bytes] = '\0';
+        char* content = receive_buffer + 1 + 2 * sizeof(int);
+        std::string message(content);
+        workers.enqueue(&Server::client_message_status, this, client_info, message_number, message_total, message);
+    } else {
+        Logger::logger_inst->error("Unknown message type");
+    }
+}
+
+void server::Server::disconnect_time_outed(){
 
 }
 
 void server::Server::serve_loop() {
     Logger::logger_inst->info("Server started on port {}", SERVER_PORT);
-    DWORD client_socket;
-    LPOVERLAPPED lpo;
-    DWORD bytes_received;
-    DWORD bytes_to_receive;
-    BYTE receive_buffer[MESSAGE_SIZE + 1];
-    OVERLAPPED initial_ol{};
-    initial_ol.hEvent = read_event_d;
-    initial_ol.Internal = 0;
-    initial_ol.InternalHigh = 0;
-    initial_ol.Offset = 0;
-    initial_ol.OffsetHigh = 0;
-    auto status = ReadFile ((HANDLE)server_socket, &receive_buffer, sizeof(receive_buffer), &bytes_received, &initial_ol);
-
-    while (!terminate) {
-        std::memset(&receive_buffer, 0, MESSAGE_SIZE);
-        status = GetQueuedCompletionStatus(completion_port, &bytes_to_receive, &client_socket, &lpo, 2000);
-        Logger::logger_inst->info("loop {} {} {} {}", status, bytes_to_receive, client_socket, GetLastError());
-        if(!status) continue;
-
-        OVERLAPPED ol{};
-        ol.hEvent = read_event_d;
-        ol.Offset = 0;
-        ol.OffsetHigh = 0;
-
-        auto read_success = ReadFile ((HANDLE)client_socket, &receive_buffer, bytes_to_receive, &bytes_received, &ol);
-        if(!read_success){
-            DWORD err_code = GetLastError();
-            if(err_code == ERROR_IO_PENDING){
-                WaitForSingleObject(ol.hEvent, INFINITE);
-                handle_client_datagram(client_socket, receive_buffer, bytes_received);
-                continue;
+    WSAEVENT events[1] = {WSACreateEvent()};
+    WSAEventSelect(server_socket, events[0], FD_READ);
+    while(!terminate)
+    {
+        auto result = WSAWaitForMultipleEvents(1, events, FALSE, 2000, FALSE);
+        switch(result)
+        {
+            case WAIT_TIMEOUT:
+                disconnect_time_outed();
+                break;
+            case WAIT_OBJECT_0:
+                handle_client_datagram(events[0]);
+                break;
+            case WAIT_FAILED:{
+                Logger::logger_inst->error("Select failed {}", result);
+                terminate = true;
+                break;
             }
-            Logger::logger_inst->error("Error in socket read {}", err_code);
-        } else {
-            handle_client_datagram(client_socket, receive_buffer, bytes_received);
+            default:{
+                Logger::logger_inst->error("Unexpected select event {}", result);
+               terminate = true;
+            }
         }
     }
+    CloseHandle(events[0]);
 }
 
 void server::Server::stop() {

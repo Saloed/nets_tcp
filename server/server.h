@@ -113,7 +113,15 @@ namespace server {
         HANDLE read_event_d;
         HANDLE completion_port;
 
-        void handle_client_datagram(DWORD client_socket, BYTE *receive_buffer, DWORD length);
+        void handle_client_datagram(WSAEVENT);
+
+        void disconnect_time_outed();
+
+        void refresh_client_timeout(sockaddr_storage client_info);
+
+        void client_message_status(sockaddr_storage client_info, int chunk_number, int status);
+
+        void client_message_chunk(sockaddr_storage client_info, int chunk_number, int total, std::string& message);
     };
 };
 
