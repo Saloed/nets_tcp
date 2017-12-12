@@ -103,15 +103,13 @@ namespace server {
         std::string list_clients();
 
     private:
-        std::unordered_map<DWORD, Client> clients;
+        std::unordered_map<int64_t , Client> clients;
         std::thread server_thread;
         std::mutex clients_mutex;
         ThreadPool workers;
         FinanceDb database;
         volatile std::atomic_bool terminate;
         SOCKET server_socket;
-        HANDLE read_event_d;
-        HANDLE completion_port;
 
         void handle_client_datagram(WSAEVENT);
 

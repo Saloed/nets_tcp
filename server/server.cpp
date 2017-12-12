@@ -270,8 +270,9 @@ void server::Server::client_message_status(sockaddr_storage client_info, int chu
 }
 
 
-int get_id_for_client_info(sockaddr_in client_info){
-    client_info.sin_addr
+int64_t get_id_for_client_info(sockaddr_in client_info){
+    int64_t result = client_info.sin_addr.s_addr;
+    return result << 32 | client_info.sin_port;
 }
 
 
@@ -292,14 +293,12 @@ void server::Server::handle_client_datagram(WSAEVENT event){
     }
 
     if(bytes == 0){
-        workers.enqueue(&Server::refresh_client_timeout, this, client_info);
-        return;
+        return refresh_client_timeout(client_info);
     }
     char message_type = receive_buffer[0];
     if(message_type == CHUNK_REQUEST_MESSAGE || message_type == CHUNK_SUCCESS_MESSAGE){
         int message_number = *(int *)(receive_buffer + 1);
-        workers.enqueue(&Server::client_message_status, this, client_info, message_number, message_type);
-        return;
+        return client_message_status(client_info, message_number, message_type);
     } else if (message_type == CONTENT_MESSAGE) {
         auto * as_int_array = (int *)(receive_buffer + 1);
         int message_number = as_int_array[0];
@@ -307,7 +306,7 @@ void server::Server::handle_client_datagram(WSAEVENT event){
         receive_buffer[bytes] = '\0';
         char* content = receive_buffer + 1 + 2 * sizeof(int);
         std::string message(content);
-        workers.enqueue(&Server::client_message_status, this, client_info, message_number, message_total, message);
+        return client_message_chunk(client_info, message_number, message_total, message);
     } else {
         Logger::logger_inst->error("Unknown message type");
     }
