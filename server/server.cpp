@@ -5,6 +5,7 @@
 #include "json/src/json.hpp"
 
 
+
 void server::Server::create_server_socket() {
     WSADATA wsa{};
     auto init_status = WSAStartup(MAKEWORD(2, 2), &wsa);
@@ -49,6 +50,7 @@ void server::Server::close_client(int64_t client_d) {
     if (clients.find(client_d) == clients.end())
         return;
     auto &&client = clients[client_d];
+    client.stop_timer_if_running(receive_timers);
     clients.erase(client_d);
     unlock_clients();
     Logger::logger_inst->info("Client {} disconnected", client_d);
@@ -248,10 +250,31 @@ void server::Server::send_chunk(sockaddr_in& client_addr, std::string_view messa
     }
 }
 
+struct timer_callback_params{
+    server::Server* _server;
+    int64_t client_id;
+};
+
+VOID CALLBACK receive_timer_callback(PVOID params, BOOLEAN TimerOrWaitFired) {
+    auto callback_info = reinterpret_cast<timer_callback_params*>(params);
+    auto&& client = callback_info->_server->clients[callback_info->client_id];
+    char info_str[sizeof(int) + 1];
+    info_str[0] = CHUNK_REQUEST_MESSAGE;
+    auto packet_info = (int *)(info_str + 1);
+    packet_info[0] = client.receive_buffer.size();
+    auto packet = std::string(info_str);
+    callback_info->_server->send_chunk(callback_info->client_id, packet);
+}
+
+
 void server::Server::client_message_chunk(int64_t client_id, int chunk_number, int total, std::string &message) {
     std::vector<std::string>* recv_buffer = &clients[client_id].receive_buffer;
     if(chunk_number == 0){
         recv_buffer->clear();
+        auto params = timer_callback_params{this, client_id};
+        CreateTimerQueueTimer(&clients[client_id].next_receive_packet_timer, receive_timers,
+                              (WAITORTIMERCALLBACK) receive_timer_callback,
+                              &params, 0, 2000, 0);
     }
     auto expected_message = recv_buffer->size();
     if(chunk_number < expected_message){
@@ -276,6 +299,7 @@ void server::Server::client_message_chunk(int64_t client_id, int chunk_number, i
         send_chunk(client_id, packet);
     }
     if(recv_buffer->size() == total){
+        clients[client_id].stop_timer_if_running(receive_timers);
         handle_client_if_possible(client_id);
     }
 }
@@ -389,6 +413,7 @@ void server::Server::stop() {
     if (timer_thread.joinable()) {
         timer_thread.join();
     }
+    DeleteTimerQueue(receive_timers);
     WSACleanup();
 }
 
@@ -412,6 +437,7 @@ void server::Server::start() {
     terminate = false;
     server_thread = std::move(std::thread(&Server::serve_loop, this));
     timer_thread = std::move(std::thread(&Server::timer_loop, this));
+    receive_timers = CreateTimerQueue();
 }
 
 bool server::Server::is_active() {

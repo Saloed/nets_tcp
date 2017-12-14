@@ -32,3 +32,5 @@ add_executable(db_init server/database/initialize.cpp ${FINANCE_DB_SRC} ${LOGGER
 
 target_link_libraries(server SQLiteCpp sqlite3 spdlog ws2_32)
 target_link_libraries(db_init SQLiteCpp sqlite3 spdlog)
+
+#add_executable(tmp tmp.cpp)

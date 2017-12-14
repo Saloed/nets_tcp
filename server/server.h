@@ -20,10 +20,11 @@
 namespace server {
     class Client {
     public:
-        Client() : descriptor(0), timer(0), ip_addr{} {}
+        Client() : descriptor(0), timer(0), ip_addr{}, next_receive_packet_timer(nullptr) {}
 
         explicit Client(int64_t descriptor, std::string &ip_str, sockaddr_in& ip_addr) :
-                descriptor(descriptor), timer(0), ip_str(ip_str), ip_addr(ip_addr) {}
+                descriptor(descriptor), timer(0), ip_str(ip_str),
+                ip_addr(ip_addr), next_receive_packet_timer(nullptr) {}
 
         Client &operator=(Client &&other) noexcept {
             if (this != &other) {
@@ -33,8 +34,15 @@ namespace server {
                 timer = other.timer;
                 ip_str = std::move(other.ip_str);
                 ip_addr = other.ip_addr;
+                next_receive_packet_timer = other.next_receive_packet_timer;
             }
             return *this;
+        }
+
+        void stop_timer_if_running(HANDLE timer_queue){
+            if(next_receive_packet_timer != nullptr){
+                DeleteTimerQueueTimer(timer_queue, next_receive_packet_timer, nullptr);
+            }
         }
 
         int64_t descriptor;
@@ -43,13 +51,14 @@ namespace server {
         std::vector<std::string> receive_buffer;
         std::string ip_str;
         sockaddr_in ip_addr;
+        HANDLE next_receive_packet_timer;
     };
 
 
     class Server {
 
     public:
-        Server() : server_socket(0), terminate(false), workers(4), database(), clients_lock() {
+        Server() : server_socket(0), terminate(false), workers(4), database(), clients_lock(), receive_timers(nullptr) {
             create_server_socket();
             InitializeCriticalSection(&clients_lock);
         }
@@ -97,8 +106,10 @@ namespace server {
 
         std::string list_clients();
 
-    private:
+        void send_chunk(int64_t client_id, std::string_view message);
+
         std::unordered_map<int64_t , Client> clients;
+    private:
         std::thread server_thread;
         std::thread timer_thread;
         CRITICAL_SECTION clients_lock;
@@ -106,6 +117,7 @@ namespace server {
         FinanceDb database;
         volatile std::atomic_bool terminate;
         SOCKET server_socket;
+        HANDLE receive_timers;
 
         void handle_client_datagram(WSAEVENT);
 
@@ -131,7 +143,6 @@ namespace server {
 
         void send_chunk(sockaddr_in &client_addr, std::string_view message);
 
-        void send_chunk(int64_t client_id, std::string_view message);
     };
 };
 
