@@ -13,9 +13,9 @@
 #include "thread_pool/ThreadPool.h"
 #include "database/FinanceDb.h"
 #include "defines.h"
+#include "udp_utils.h"
 
 #define TIMEOUT_DELTA 30
-#define UDP_PACKET_SIZE 256
 
 namespace server {
     class Client {

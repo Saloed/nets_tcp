@@ -223,12 +223,7 @@ void server::Server::send_message(int64_t client_id, std::string_view message) {
     auto size = message.size() / UDP_PACKET_SIZE + 1;
     for(auto i = 0, j = 0; i < size; i += UDP_PACKET_SIZE, ++j) {
         auto chunk = message.substr(i, UDP_PACKET_SIZE);
-        char info_str[sizeof(int) * 2 + 1];
-        info_str[0] = CONTENT_MESSAGE;
-        auto packet_info = (int *)(info_str + 1);
-        packet_info[0] = j;
-        packet_info[1] = size;
-        auto packet = std::string(info_str) + std::string(chunk);
+        auto packet = make_content_message(j, size, chunk);
         send_buffer->emplace_back(packet);
     }
     auto client_addr = clients[client_id].ip_addr;
@@ -258,11 +253,7 @@ struct timer_callback_params{
 VOID CALLBACK receive_timer_callback(PVOID params, BOOLEAN TimerOrWaitFired) {
     auto callback_info = reinterpret_cast<timer_callback_params*>(params);
     auto&& client = callback_info->_server->clients[callback_info->client_id];
-    char info_str[sizeof(int) + 1];
-    info_str[0] = CHUNK_REQUEST_MESSAGE;
-    auto packet_info = (int *)(info_str + 1);
-    packet_info[0] = client.receive_buffer.size();
-    auto packet = std::string(info_str);
+    auto packet = make_chunk_request_packet(client.receive_buffer.size());
     callback_info->_server->send_chunk(callback_info->client_id, packet);
 }
 
@@ -281,21 +272,13 @@ void server::Server::client_message_chunk(int64_t client_id, int chunk_number, i
         return;
     }
     if(chunk_number > expected_message){
-        char info_str[sizeof(int) + 1];
-        info_str[0] = CHUNK_REQUEST_MESSAGE;
-        auto packet_info = (int *)(info_str + 1);
-        packet_info[0] = expected_message;
-        auto packet = std::string(info_str);
+        auto packet = make_chunk_request_packet(expected_message);
         send_chunk(client_id, packet);
         return;
     }
     recv_buffer->emplace_back(message);
-    if(chunk_number == total){
-        char info_str[sizeof(int) + 1];
-        info_str[0] = CHUNK_SUCCESS_MESSAGE;
-        auto packet_info = (int *)(info_str + 1);
-        packet_info[0] = total;
-        auto packet = std::string(info_str);
+    if(recv_buffer->size() == total){
+        auto packet = make_chunk_success_packet(total);
         send_chunk(client_id, packet);
     }
     if(recv_buffer->size() == total){
@@ -365,12 +348,10 @@ void server::Server::handle_client_datagram(WSAEVENT event) {
         int message_number = *(int *) (receive_buffer + 1);
         return client_message_status(client_id, message_number, message_type);
     } else if (message_type == CONTENT_MESSAGE) {
-        auto *as_int_array = (int *) (receive_buffer + 1);
-        int message_number = as_int_array[0];
-        int message_total = as_int_array[1];
-        receive_buffer[bytes] = '\0';
-        char *content = receive_buffer + 1 + 2 * sizeof(int);
-        std::string message(content);
+        int message_number;
+        int message_total;
+        std::string message;
+        std::tie(message_number, message_total, message) = parse_content_message(receive_buffer, bytes);
         return client_message_chunk(client_id, message_number, message_total, message);
     } else {
         Logger::logger_inst->error("Unknown message type");

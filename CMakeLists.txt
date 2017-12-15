@@ -22,11 +22,11 @@ set(DEFINES shared/defines.h)
 set(FINANCE_DB_SRC server/database/FinanceDb.h server/database/FinanceDb.cpp)
 
 set(SERVER_SRC server/server.cpp server/server.h)
-set(SERVER_SRC ${SERVER_SRC} ${DEFINES} ${FINANCE_DB_SRC} ${LOGGER_SRC} ${JSON_SRC} ${THREAD_POOL_SRC})
+set(SERVER_SRC ${SERVER_SRC} ${DEFINES} ${FINANCE_DB_SRC} ${LOGGER_SRC} ${JSON_SRC} ${THREAD_POOL_SRC} shared/udp_utils.h)
 
 add_executable(server server/server_main.cpp ${SERVER_SRC})
 
-set(CLIENT_SRC ${DEFINES} client/client_defs.h)
+set(CLIENT_SRC ${DEFINES} client/client_defs.h shared/udp_utils.h)
 add_executable(client client/client.cpp ${CLIENT_SRC})
 add_executable(db_init server/database/initialize.cpp ${FINANCE_DB_SRC} ${LOGGER_SRC})
 

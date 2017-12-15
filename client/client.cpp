@@ -1,38 +1,20 @@
 #define WIN32_LEAN_AND_MEAN
 
-#include <windows.h>
-#include <winsock2.h>
-#include <ws2tcpip.h>
-
-#pragma comment (lib, "Ws2_32.lib")
-#pragma comment (lib, "Mswsock.lib")
-#pragma comment (lib, "AdvApi32.lib")
-
 #include <iostream>
+#include <sys/socket.h>
+#include <netdb.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+#include <udp_utils.h>
 #include "json/src/json.hpp"
 #include "defines.h"
 #include "client_defs.h"
 
-int receive_from_server(SOCKET server_socket, std::string &received) {
-    char message_buf[MESSAGE_SIZE];
-    while (true) {
-        auto &&count = recv(server_socket, message_buf, MESSAGE_SIZE, 0);
-        if (count == 0) {
-            std::cerr << "socket closed" << std::endl;
-            return -1;
-        }
-        if (count < 0) {
-            std::cerr << "socket error " << WSAGetLastError() << std::endl;
-            return -1;
-        }
-        received.append(message_buf, count);
-        auto &&message_end = received.find(MESSAGE_END);
-        if (message_end != std::string::npos) {
-            received.erase(message_end);
-            return 0;
-        }
-    }
-}
+
+void send_to_server(sockaddr_in &, int, std::string &);
+
+int receive_from_server(sockaddr_in &, int, std::string &);
+
 
 std::vector<std::string> split_by_space(std::string &str) {
     std::istringstream buf(str);
@@ -65,43 +47,14 @@ std::string help_message() {
 }
 
 int main() {
+    sockaddr_in server_address{};
 
-    WSADATA wsa_data{0};
+    int client_sock = socket(AF_INET, SOCK_DGRAM, 0);
+    memset((char *) &server_address, 0, sizeof(server_address));
+    server_address.sin_family = AF_INET;
+    server_address.sin_port = htons(SERVER_PORT);
+    inet_aton("192.168.1.73", &server_address.sin_addr);
 
-    auto &&startup_status = WSAStartup(MAKEWORD(2, 2), &wsa_data);
-    if (startup_status != 0) {
-        std::cerr << "WSAStartup failed with error code " << startup_status << std::endl;
-        std::exit(1);
-    }
-
-    addrinfo *result = nullptr;
-    addrinfo hints{};
-    ZeroMemory(&hints, sizeof(hints));
-    hints.ai_family = AF_UNSPEC;
-    hints.ai_socktype = SOCK_STREAM;
-    hints.ai_protocol = IPPROTO_TCP;
-
-    auto &&getaddr_status = getaddrinfo("192.168.1.73", "7777", &hints, &result);
-    if (getaddr_status != 0) {
-        std::cerr << "Getaddr failed with status " << getaddr_status << std::endl;
-        WSACleanup();
-        std::exit(2);
-    }
-
-    auto &&server_socket = socket(result->ai_family, result->ai_socktype, result->ai_protocol);
-    if (server_socket == INVALID_SOCKET) {
-        std::cerr << "Socket creation failed with status " << WSAGetLastError() << std::endl;
-        WSACleanup();
-        std::exit(3);
-    }
-
-    auto &&connect_status = connect(server_socket, result->ai_addr, static_cast<int>(result->ai_addrlen));
-    if (connect_status == SOCKET_ERROR) {
-        std::cerr << "Connection to server failed with status " << WSAGetLastError() << std::endl;
-        WSACleanup();
-        std::exit(4);
-    }
-    freeaddrinfo(result);
 
     std::string in_str;
     std::string received;
@@ -165,17 +118,104 @@ int main() {
         } else {
             to_send = TXT_PREFIX + in_str + MESSAGE_END;
         }
-        if (send(server_socket, to_send.c_str(), to_send.length(), 0) == -1) {
-            std::cerr << "Error in send" << std::endl;
-            break;
-        }
+        send_to_server(server_address, client_sock, to_send);
         std::cout << "Sent: " << in_str << std::endl;
-        auto &&receive_code = receive_from_server(server_socket, received);
+        auto &&receive_code = receive_from_server(server_address, client_sock, received);
         if (receive_code < 0) break;
         auto &&response = parse_response(received);
         std::cout << "Received: " << response << std::endl;
     }
+    close(client_sock);
+}
 
-    closesocket(server_socket);
-    WSACleanup();
+void send_to_server(sockaddr_in &server_addr, int socket, std::string &message) {
+    std::vector<std::string> send_buffer;
+    auto size = message.size() / UDP_PACKET_SIZE + 1;
+    for (auto i = 0, j = 0; i < size; i += UDP_PACKET_SIZE, ++j) {
+        auto chunk = message.substr(i, UDP_PACKET_SIZE);
+        auto packet = make_content_message(j, size, chunk);
+        send_buffer.emplace_back(packet);
+    }
+    auto _server_addr = reinterpret_cast<sockaddr *>(&server_addr);
+    for (auto &&packet: send_buffer) {
+        auto &&send_stat = sendto(socket, packet.data(), packet.size(), 0, _server_addr, sizeof(sockaddr));
+    }
+    char receive_buffer[MESSAGE_SIZE + 1];
+    sockaddr client_info{};
+    auto client_info_size = sizeof(sockaddr);
+    auto client_info_size_ptr = reinterpret_cast<socklen_t *>(&client_info_size);
+    while (true) {
+        bzero(receive_buffer, MESSAGE_SIZE + 1);
+        auto bytes = recvfrom(socket, receive_buffer, MESSAGE_SIZE, 0, &client_info, client_info_size_ptr);
+        auto address = reinterpret_cast<sockaddr_in *>(&client_info);
+        if (address->sin_addr.s_addr != server_addr.sin_addr.s_addr) continue;
+        if (bytes < 0) {
+            std::cerr << "Receive error" << std::endl;
+            continue;
+        }
+        if (bytes == 0) continue;
+        auto message_type = receive_buffer[0];
+        if (message_type == CONTENT_MESSAGE) continue;
+        if (message_type == CHUNK_REQUEST_MESSAGE) {
+            int message_number = *(int *) (receive_buffer + 1);
+            auto packet = send_buffer.at(message_number);
+            auto &&send_stat = sendto(socket, packet.data(), packet.size(), 0, _server_addr, sizeof(sockaddr));
+            continue;
+        }
+        if (message_type == CHUNK_SUCCESS_MESSAGE) {
+            int message_number = *(int *) (receive_buffer + 1);
+            if (message_number == send_buffer.size()) break;
+        }
+    }
+}
+
+int receive_from_server(sockaddr_in &server_addr, int socket, std::string &received) {
+    char buffer[MESSAGE_SIZE + 1];
+    std::vector<std::string> receive_buffer;
+    sockaddr client_info{};
+    auto client_info_size = sizeof(sockaddr);
+    auto client_info_size_ptr = reinterpret_cast<socklen_t *>(&client_info_size);
+    auto _server_addr = reinterpret_cast<sockaddr *>(&server_addr);
+    while (true) {
+        bzero(buffer, MESSAGE_SIZE + 1);
+        auto bytes = recvfrom(socket, buffer, MESSAGE_SIZE, 0, &client_info, client_info_size_ptr);
+        auto address = reinterpret_cast<sockaddr_in *>(&client_info);
+        if (address->sin_addr.s_addr != server_addr.sin_addr.s_addr) continue;
+        if (bytes < 0) {
+            std::cerr << "Receive error" << std::endl;
+            continue;
+        }
+        if (bytes == 0) continue;
+        auto message_type = buffer[0];
+        if (message_type == CHUNK_REQUEST_MESSAGE || message_type == CHUNK_SUCCESS_MESSAGE) continue;
+        if (message_type == CONTENT_MESSAGE) {
+            auto expected_chunk = receive_buffer.size();
+            int message_number;
+            int message_total;
+            std::string message;
+            std::tie(message_number, message_total, message) = parse_content_message(buffer, bytes);
+            if(message_number < expected_chunk) continue;
+            if(message_number > expected_chunk){
+                auto packet = make_chunk_request_packet(expected_chunk);
+                auto &&send_stat = sendto(socket, packet.data(), packet.size(), 0, _server_addr, sizeof(sockaddr));
+                continue;
+            }
+            receive_buffer.emplace_back(message);
+            if(receive_buffer.size() == message_total){
+                auto packet = make_chunk_success_packet(message_total);
+                auto &&send_stat = sendto(socket, packet.data(), packet.size(), 0, _server_addr, sizeof(sockaddr));
+                break;
+            }
+        }
+    }
+    for(auto&& chunk : receive_buffer){
+        received += chunk;
+    }
+    auto &&message_end = received.find(MESSAGE_END);
+    if (message_end != std::string::npos) {
+        received.erase(message_end);
+        return 0;
+    } else {
+        return -1;
+    }
 }
