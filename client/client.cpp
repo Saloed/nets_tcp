@@ -158,14 +158,13 @@ void send_to_server(sockaddr_in &server_addr, int socket, std::string &message) 
         if (message_type == CONTENT_MESSAGE) continue;
         if (message_type == CHUNK_REQUEST_MESSAGE) {
             int message_number = *(int *) (receive_buffer + 1);
+            std::cout << message_number << std::endl;
             auto packet = send_buffer.at(message_number);
             auto &&send_stat = sendto(socket, packet.data(), packet.size(), 0, _server_addr, sizeof(sockaddr));
             continue;
         }
         if (message_type == CHUNK_SUCCESS_MESSAGE) {
             int message_number = *(int *) (receive_buffer + 1);
-            std::cout << message_number <<" " << send_buffer.size() << std::endl;
-
             if (message_number == send_buffer.size()) break;
         }
     }
