@@ -1,6 +1,7 @@
 #include <sstream>
 #include <WS2tcpip.h>
 #include "server.h"
+#include "udp_utils.h"
 #include "logging/logger.h"
 #include "json/src/json.hpp"
 
@@ -30,17 +31,17 @@ void server::Server::create_server_socket() {
     server.sin_addr.s_addr = INADDR_ANY;
     server.sin_port = htons(SERVER_PORT);
 
-    auto bind_status = bind(server_d, (sockaddr *) &server, sizeof(sockaddr_in));
+    auto bind_status = bind(server_d, (sockaddr *) &server, sizeof(sockaddr));
     if (bind_status == SOCKET_ERROR) {
         Logger::logger_inst->error("Error in socket bind {}", WSAGetLastError());
         std::exit(EXIT_FAILURE);
     }
-    u_long argp = 1;
-    auto nonblock_status = ioctlsocket(server_d, 0x8004667E, &argp);
-    if (nonblock_status == SOCKET_ERROR) {
-        Logger::logger_inst->error("Error in setting socket nonblock {}", WSAGetLastError());
-        std::exit(EXIT_FAILURE);
-    }
+//    u_long argp = 1;
+//    auto nonblock_status = ioctlsocket(server_d, 0x8004667E, &argp);
+//    if (nonblock_status == SOCKET_ERROR) {
+//        Logger::logger_inst->error("Error in setting socket nonblock {}", WSAGetLastError());
+//        std::exit(EXIT_FAILURE);
+//    }
     server_socket = server_d;
     Logger::logger_inst->info("Server initialized");
 }
@@ -322,66 +323,79 @@ int64_t server::Server::get_client_id(sockaddr_in *client_addr) {
     return id;
 }
 
-void server::Server::handle_client_datagram(WSAEVENT event) {
-    WSANETWORKEVENTS network_events{};
+int server::Server::handle_client_datagram(WSAEVENT event) {
+//    WSANETWORKEVENTS network_events{};
     sockaddr client_info{};
     socklen_t client_info_size = sizeof(sockaddr);
     char receive_buffer[MESSAGE_SIZE + 1];
-    WSAEnumNetworkEvents(server_socket, event, &network_events);
+//    WSAEnumNetworkEvents(server_socket, event, &network_events);
     auto bytes = recvfrom(server_socket, receive_buffer, MESSAGE_SIZE, 0, &client_info, &client_info_size);
     auto client_addr = reinterpret_cast<sockaddr_in*>(& client_info);
 
     if (bytes < 0) {
         auto err_code = GetLastError();
-        if (err_code == WSAECONNRESET) return;
+        if (err_code == WSAECONNRESET) return 1;
         Logger::logger_inst->error("Error in recv {}", err_code);
-        terminate = true;
+        return -1;
     }
+    Logger::logger_inst->info("Received {}", receive_buffer);
     auto client_id = get_client_id(client_addr);
     refresh_client_timeout(client_id);
 
     if (bytes == 0)
-        return;
+        return 0;
 
     char message_type = receive_buffer[0];
     if (message_type == CHUNK_REQUEST_MESSAGE || message_type == CHUNK_SUCCESS_MESSAGE) {
         int message_number = *(int *) (receive_buffer + 1);
-        return client_message_status(client_id, message_number, message_type);
+        client_message_status(client_id, message_number, message_type);
+        return 2;
     } else if (message_type == CONTENT_MESSAGE) {
         int message_number;
         int message_total;
         std::string message;
         std::tie(message_number, message_total, message) = parse_content_message(receive_buffer, bytes);
-        return client_message_chunk(client_id, message_number, message_total, message);
+        client_message_chunk(client_id, message_number, message_total, message);
+        return 3;
     } else {
         Logger::logger_inst->error("Unknown message type");
+        return 4;
     }
+    return -2;
 }
 
 void server::Server::serve_loop() {
     Logger::logger_inst->info("Server started on port {}", SERVER_PORT);
-    WSAEVENT events[1] = {WSACreateEvent()};
-    WSAEventSelect(server_socket, events[0], FD_READ);
-    while (!terminate) {
-        auto result = WSAWaitForMultipleEvents(1, events, FALSE, 2000, FALSE);
-        switch (result) {
-            case WAIT_TIMEOUT:
-                break;
-            case WAIT_OBJECT_0:
-                handle_client_datagram(events[0]);
-                break;
-            case WAIT_FAILED: {
-                Logger::logger_inst->error("Select failed {}", result);
-                terminate = true;
-                break;
-            }
-            default: {
-                Logger::logger_inst->error("Unexpected select event {}", result);
-                terminate = true;
-            }
+//    WSAEVENT events[1] = {WSACreateEvent()};
+//    WSAEventSelect(server_socket, events[0], FD_READ);
+//    while (!terminate) {
+//        auto result = WSAWaitForMultipleEvents(1, events, FALSE, 2000, FALSE);
+//        switch (result) {
+//            case WAIT_TIMEOUT:
+//                Logger::logger_inst->info("timeout");
+//                break;
+//            case WAIT_OBJECT_0:
+//                handle_client_datagram(events[0]);
+//                break;
+//            case WAIT_FAILED: {
+//                Logger::logger_inst->error("Select failed {}", result);
+//                terminate = true;
+//                break;
+//            }
+//            default: {
+//                Logger::logger_inst->error("Unexpected select event {}", result);
+//                terminate = true;
+//            }
+//        }
+//    }
+//    CloseHandle(events[0]);
+    while (!terminate){
+        auto status = handle_client_datagram(nullptr);
+        if(status < 0){
+            Logger::logger_inst->error("Receive with status {}", status);
+            break;
         }
     }
-    CloseHandle(events[0]);
 }
 
 void server::Server::stop() {
