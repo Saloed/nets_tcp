@@ -132,7 +132,7 @@ void send_to_server(sockaddr_in &server_addr, int socket, std::string &message) 
     std::vector<std::string> send_buffer;
     auto size = message.size() / UDP_PACKET_SIZE + 1;
     for (auto i = 0, j = 0; i < size; i += UDP_PACKET_SIZE, ++j) {
-        auto chunk = message.substr(i, UDP_PACKET_SIZE);
+        std::string chunk = message.substr(i, UDP_PACKET_SIZE);
         auto packet = make_content_message(j, size, chunk);
         send_buffer.emplace_back(packet);
     }
