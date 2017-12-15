@@ -1,13 +1,7 @@
-//
-// Created by sobol on 12/15/17.
-//
-
+#pragma once
 #include <string>
 #include <tuple>
 #include "defines.h"
-
-#ifndef ECHOSERVER_UDP_UTILS_H
-#define ECHOSERVER_UDP_UTILS_H
 
 std::string make_chunk_success_packet(int chunk_number) {
     char info_str[sizeof(int) + 1];
@@ -42,5 +36,3 @@ std::tuple<int, int, std::string> parse_content_message(char* received_message, 
     std::string message(content, message_size);
     return std::make_tuple(message_number, message_total, message);
 };
-
-#endif //ECHOSERVER_UDP_UTILS_H

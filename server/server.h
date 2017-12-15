@@ -1,6 +1,4 @@
-#ifndef ECHOSERVER_SERVER_H
-#define ECHOSERVER_SERVER_H
-
+#pragma once
 #include <mutex>
 #include <vector>
 #include <unordered_map>
@@ -13,7 +11,6 @@
 #include "thread_pool/ThreadPool.h"
 #include "database/FinanceDb.h"
 #include "defines.h"
-#include "udp_utils.h"
 
 #define TIMEOUT_DELTA 30
 
@@ -119,7 +116,7 @@ namespace server {
         SOCKET server_socket;
         HANDLE receive_timers;
 
-        void handle_client_datagram(WSAEVENT);
+        int handle_client_datagram(WSAEVENT);
 
         void lock_clients(){
             EnterCriticalSection(&clients_lock);
@@ -145,5 +142,3 @@ namespace server {
 
     };
 };
-
-#endif //ECHOSERVER_SERVER_H
