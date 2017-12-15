@@ -46,14 +46,15 @@ std::string help_message() {
     return message.str();
 }
 
-int main() {
+int main(int argc,  char* argv[]) {
     sockaddr_in server_address{};
 
     int client_sock = socket(AF_INET, SOCK_DGRAM, 0);
     memset((char *) &server_address, 0, sizeof(server_address));
     server_address.sin_family = AF_INET;
     server_address.sin_port = htons(SERVER_PORT);
-    inet_aton("192.168.1.73", &server_address.sin_addr);
+    if(argc < 2) argv[1] = "192.168.1.73";
+    inet_aton(argv[1], &server_address.sin_addr);
 
 
     std::string in_str;
