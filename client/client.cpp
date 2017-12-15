@@ -47,15 +47,13 @@ std::string help_message() {
 }
 
 int main(int argc,  char* argv[]) {
+    if(argc < 2) argv[1] = "192.168.1.73";
     sockaddr_in server_address{};
-
-    int client_sock = socket(AF_INET, SOCK_DGRAM, 0);
+    int client_sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
     memset((char *) &server_address, 0, sizeof(server_address));
     server_address.sin_family = AF_INET;
     server_address.sin_port = htons(SERVER_PORT);
-    if(argc < 2) argv[1] = "192.168.1.73";
-    inet_aton(argv[1], &server_address.sin_addr);
-
+    server_address.sin_addr.s_addr = inet_addr(argv[1]);
 
     std::string in_str;
     std::string received;
@@ -130,6 +128,7 @@ int main(int argc,  char* argv[]) {
 }
 
 void send_to_server(sockaddr_in &server_addr, int socket, std::string &message) {
+    std::cout << "Sending " << message << std::endl;
     std::vector<std::string> send_buffer;
     auto size = message.size() / UDP_PACKET_SIZE + 1;
     for (auto i = 0, j = 0; i < size; i += UDP_PACKET_SIZE, ++j) {
