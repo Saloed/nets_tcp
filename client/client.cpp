@@ -145,7 +145,6 @@ void send_to_server(sockaddr_in &server_addr, int socket, std::string &message) 
     auto client_info_size = sizeof(sockaddr);
     auto client_info_size_ptr = reinterpret_cast<socklen_t *>(&client_info_size);
     while (true) {
-        std::cout << "help me" << std::endl;
         bzero(receive_buffer, MESSAGE_SIZE + 1);
         auto bytes = recvfrom(socket, receive_buffer, MESSAGE_SIZE, 0, &client_info, client_info_size_ptr);
         auto address = reinterpret_cast<sockaddr_in *>(&client_info);
@@ -165,6 +164,8 @@ void send_to_server(sockaddr_in &server_addr, int socket, std::string &message) 
         }
         if (message_type == CHUNK_SUCCESS_MESSAGE) {
             int message_number = *(int *) (receive_buffer + 1);
+            std::cout << message_number <<" " << send_buffer.size() << std::endl;
+
             if (message_number == send_buffer.size()) break;
         }
     }
