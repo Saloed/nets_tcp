@@ -12,16 +12,15 @@
 #include "database/FinanceDb.h"
 #include "defines.h"
 
-#define TIMEOUT_DELTA 30
+#define TIMEOUT_DELTA 300
 
 namespace server {
     class Client {
     public:
-        Client() : descriptor(0), timer(0), ip_addr{}, next_receive_packet_timer(nullptr) {}
+        Client() : descriptor(0), timer(0), ip_addr{}, send_index(-1) {}
 
         explicit Client(int64_t descriptor, std::string &ip_str, sockaddr_in& ip_addr) :
-                descriptor(descriptor), timer(0), ip_str(ip_str),
-                ip_addr(ip_addr), next_receive_packet_timer(nullptr) {}
+                descriptor(descriptor), timer(0), ip_str(ip_str), ip_addr(ip_addr), send_index(-1) {}
 
         Client &operator=(Client &&other) noexcept {
             if (this != &other) {
@@ -31,31 +30,25 @@ namespace server {
                 timer = other.timer;
                 ip_str = std::move(other.ip_str);
                 ip_addr = other.ip_addr;
-                next_receive_packet_timer = other.next_receive_packet_timer;
+                send_index = other.send_index;
             }
             return *this;
         }
 
-        void stop_timer_if_running(HANDLE timer_queue){
-            if(next_receive_packet_timer != nullptr){
-                DeleteTimerQueueTimer(timer_queue, next_receive_packet_timer, nullptr);
-            }
-        }
-
         int64_t descriptor;
         int timer;
+        int send_index;
         std::vector<std::string> send_buffer;
         std::vector<std::string> receive_buffer;
         std::string ip_str;
         sockaddr_in ip_addr;
-        HANDLE next_receive_packet_timer;
     };
 
 
     class Server {
 
     public:
-        Server() : server_socket(0), terminate(false), workers(4), database(), clients_lock(), receive_timers(nullptr) {
+        Server() : server_socket(0), terminate(false), workers(4), database(), clients_lock() {
             create_server_socket();
             InitializeCriticalSection(&clients_lock);
         }
@@ -114,7 +107,6 @@ namespace server {
         FinanceDb database;
         volatile std::atomic_bool terminate;
         SOCKET server_socket;
-        HANDLE receive_timers;
 
         int handle_client_datagram(WSAEVENT);
 

@@ -50,8 +50,7 @@ void server::Server::close_client(int64_t client_d) {
     lock_clients();
     if (clients.find(client_d) == clients.end())
         return;
-    auto &&client = clients[client_d];
-    client.stop_timer_if_running(receive_timers);
+//    auto &&client = clients[client_d];
     clients.erase(client_d);
     unlock_clients();
     Logger::logger_inst->info("Client {} disconnected", client_d);
@@ -221,16 +220,20 @@ void server::Server::handle_client_if_possible(int64_t client_id) {
 void server::Server::send_message(int64_t client_id, std::string_view message) {
     std::vector<std::string>* send_buffer = &clients[client_id].send_buffer;
     send_buffer->clear();
-    auto size = message.size() / UDP_PACKET_SIZE + 1;
-    for(auto i = 0, j = 0; i < size; i += UDP_PACKET_SIZE, ++j) {
-        auto chunk = message.substr(i, UDP_PACKET_SIZE);
-        auto packet = make_content_message(j, size, chunk);
+    auto mess_size = message.size();
+    int size = mess_size / UDP_PACKET_SIZE;
+    int reminder = mess_size % UDP_PACKET_SIZE;
+    if(reminder > 0) ++size;
+    for (auto i = 0; i < size; ++i) {
+        auto chunk = std::string(message.substr(i * UDP_PACKET_SIZE, UDP_PACKET_SIZE));
+        auto packet = make_content_message(i, size, chunk);
         send_buffer->emplace_back(packet);
     }
     auto client_addr = clients[client_id].ip_addr;
     for(auto&& packet: *send_buffer) {
         send_chunk(client_addr, packet);
     }
+    clients[client_id].send_index = 0;
 }
 
 void server::Server::send_chunk(int64_t client_id, std::string_view message){
@@ -240,51 +243,33 @@ void server::Server::send_chunk(int64_t client_id, std::string_view message){
 
 void server::Server::send_chunk(sockaddr_in& client_addr, std::string_view message){
     auto addr = reinterpret_cast<sockaddr*>(&client_addr);
-    auto &&send_stat = sendto(server_socket, message.data(), message.size(), 0, addr, sizeof(sockaddr));
+    auto _message = std::string(message);
+    auto &&send_stat = send_udp(server_socket, _message, addr);
     if (send_stat == SOCKET_ERROR) {
         Logger::logger_inst->error("Error in send {}", WSAGetLastError());
     }
 }
 
-struct timer_callback_params{
-    server::Server* _server;
-    int64_t client_id;
-};
-
-VOID CALLBACK receive_timer_callback(PVOID params, BOOLEAN TimerOrWaitFired) {
-    auto callback_info = reinterpret_cast<timer_callback_params*>(params);
-    auto&& client = callback_info->_server->clients[callback_info->client_id];
-    auto packet = make_chunk_request_packet(client.receive_buffer.size());
-    callback_info->_server->send_chunk(callback_info->client_id, packet);
-}
-
 
 void server::Server::client_message_chunk(int64_t client_id, int chunk_number, int total, std::string &message) {
     std::vector<std::string>* recv_buffer = &clients[client_id].receive_buffer;
+    auto expected_message = recv_buffer->size();
+    if(chunk_number <= expected_message) {
+        auto packet = make_chunk_success_packet(chunk_number);
+        send_chunk(client_id, packet);
+    }
     if(chunk_number == 0){
         recv_buffer->clear();
-        auto params = timer_callback_params{this, client_id};
-        CreateTimerQueueTimer(&clients[client_id].next_receive_packet_timer, receive_timers,
-                              (WAITORTIMERCALLBACK) receive_timer_callback,
-                              &params, 0, 2000, 0);
     }
-    auto expected_message = recv_buffer->size();
-    if(chunk_number < expected_message){
+    if(chunk_number == expected_message) {
+        recv_buffer->emplace_back(message);
+    } else {
+        Logger::logger_inst->info("Received incorrect packet {} expected {}", chunk_number, expected_message);
         return;
     }
-    if(chunk_number > expected_message){
-        auto packet = make_chunk_request_packet(expected_message);
-        send_chunk(client_id, packet);
-        return;
-    }
-    recv_buffer->emplace_back(message);
-    if(recv_buffer->size() == total){
-        auto packet = make_chunk_success_packet(total);
-        send_chunk(client_id, packet);
-    }
-    if(recv_buffer->size() == total){
-        clients[client_id].stop_timer_if_running(receive_timers);
+    if(recv_buffer->size() == total && expected_message == total - 1){
         handle_client_if_possible(client_id);
+        recv_buffer->clear();
     }
 }
 
@@ -293,13 +278,12 @@ void server::Server::refresh_client_timeout(int64_t client_id) {
 }
 
 void server::Server::client_message_status(int64_t client_id, int chunk_number, int status) {
-    std::vector<std::string>* send_buffer = &clients[client_id].send_buffer;
-    if (send_buffer->empty()) return;
-    if(status == CHUNK_SUCCESS_MESSAGE && chunk_number == send_buffer->size()){
-        return send_buffer->clear();
-    }
-    if (status == CHUNK_REQUEST_MESSAGE && chunk_number < send_buffer->size()){
-        return send_chunk(client_id, send_buffer->at(chunk_number));
+    auto&& client = clients[client_id];
+    if(client.send_index < 0) return;
+    if(chunk_number == client.send_index) client.send_index++;
+    if(client.send_index == client.send_buffer.size()) {
+        client.send_index = -1;
+        client.send_buffer.clear();
     }
 }
 
@@ -324,21 +308,18 @@ int64_t server::Server::get_client_id(sockaddr_in *client_addr) {
 }
 
 int server::Server::handle_client_datagram(WSAEVENT event) {
-//    WSANETWORKEVENTS network_events{};
     sockaddr client_info{};
     socklen_t client_info_size = sizeof(sockaddr);
-    char receive_buffer[MESSAGE_SIZE + 1];
-//    WSAEnumNetworkEvents(server_socket, event, &network_events);
+    char receive_buffer[MESSAGE_SIZE];
+    std::memset(receive_buffer, 0, MESSAGE_SIZE);
     auto bytes = recvfrom(server_socket, receive_buffer, MESSAGE_SIZE, 0, &client_info, &client_info_size);
     auto client_addr = reinterpret_cast<sockaddr_in*>(& client_info);
-
     if (bytes < 0) {
         auto err_code = GetLastError();
         if (err_code == WSAECONNRESET) return 1;
         Logger::logger_inst->error("Error in recv {}", err_code);
         return -1;
     }
-    Logger::logger_inst->info("Received {}", receive_buffer);
     auto client_id = get_client_id(client_addr);
     refresh_client_timeout(client_id);
 
@@ -346,7 +327,7 @@ int server::Server::handle_client_datagram(WSAEVENT event) {
         return 0;
 
     char message_type = receive_buffer[0];
-    if (message_type == CHUNK_REQUEST_MESSAGE || message_type == CHUNK_SUCCESS_MESSAGE) {
+    if (message_type == CHUNK_SUCCESS_MESSAGE) {
         int message_number = *(int *) (receive_buffer + 1);
         client_message_status(client_id, message_number, message_type);
         return 2;
@@ -366,29 +347,6 @@ int server::Server::handle_client_datagram(WSAEVENT event) {
 
 void server::Server::serve_loop() {
     Logger::logger_inst->info("Server started on port {}", SERVER_PORT);
-//    WSAEVENT events[1] = {WSACreateEvent()};
-//    WSAEventSelect(server_socket, events[0], FD_READ);
-//    while (!terminate) {
-//        auto result = WSAWaitForMultipleEvents(1, events, FALSE, 2000, FALSE);
-//        switch (result) {
-//            case WAIT_TIMEOUT:
-//                Logger::logger_inst->info("timeout");
-//                break;
-//            case WAIT_OBJECT_0:
-//                handle_client_datagram(events[0]);
-//                break;
-//            case WAIT_FAILED: {
-//                Logger::logger_inst->error("Select failed {}", result);
-//                terminate = true;
-//                break;
-//            }
-//            default: {
-//                Logger::logger_inst->error("Unexpected select event {}", result);
-//                terminate = true;
-//            }
-//        }
-//    }
-//    CloseHandle(events[0]);
     while (!terminate){
         auto status = handle_client_datagram(nullptr);
         if(status < 0){
@@ -408,21 +366,33 @@ void server::Server::stop() {
     if (timer_thread.joinable()) {
         timer_thread.join();
     }
-    DeleteTimerQueue(receive_timers);
     WSACleanup();
 }
 
 void server::Server::timer_loop() {
-    auto timer = CreateWaitableTimer(NULL, TRUE, "Server timer");
+    auto timer = CreateWaitableTimer(nullptr, true, "Server timer");
     LARGE_INTEGER timer_time{};
-    timer_time.QuadPart = -100000000LL;
+    timer_time.QuadPart =  -1000000LL; // 100 ms
     while (!terminate) {
-        SetWaitableTimer(timer, &timer_time, 0, NULL, NULL, 0);
+        SetWaitableTimer(timer, &timer_time, 0, nullptr, nullptr, 0);
         WaitForSingleObject(timer, INFINITE);
+        std::vector<int64_t> client_ids;
+        client_ids.reserve(clients.size());
         for (auto &&entry: clients) {
-            ++entry.second.timer;
-            if (entry.second.timer > TIMEOUT_DELTA) {
-                close_client(entry.first);
+            client_ids.emplace_back(entry.first);
+        }
+        for (auto client_id: client_ids) {
+            auto&& client = clients[client_id];
+            ++client.timer;
+            if (client.timer > TIMEOUT_DELTA) {
+                close_client(client_id);
+            } else if(client.send_index >= 0 && client.timer > 2){
+                auto&& send_buffer = client.send_buffer;
+                auto client_addr = client.ip_addr;
+                for (int i = client.send_index; i < send_buffer.size(); ++i) {
+                    auto&& packet = send_buffer[i];
+                    send_chunk(client_addr, packet);
+                }
             }
         }
     }
@@ -432,7 +402,6 @@ void server::Server::start() {
     terminate = false;
     server_thread = std::move(std::thread(&Server::serve_loop, this));
     timer_thread = std::move(std::thread(&Server::timer_loop, this));
-    receive_timers = CreateTimerQueue();
 }
 
 bool server::Server::is_active() {

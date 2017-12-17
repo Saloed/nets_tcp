@@ -1,17 +1,17 @@
-#define WIN32_LEAN_AND_MEAN
-
 #include <iostream>
 #include <sys/socket.h>
 #include <netdb.h>
 #include <unistd.h>
 #include <arpa/inet.h>
-#include <udp_utils.h>
+#include <sys/time.h>
+#include <sys/select.h>
 #include "json/src/json.hpp"
 #include "defines.h"
+#include "udp_utils.h"
 #include "client_defs.h"
 
 
-void send_to_server(sockaddr_in &, int, std::string &);
+int send_to_server(sockaddr_in &, int, std::string &);
 
 int receive_from_server(sockaddr_in &, int, std::string &);
 
@@ -46,7 +46,7 @@ std::string help_message() {
     return message.str();
 }
 
-int main(int argc,  char* argv[]) {
+int main(int argc, char* argv[]) {
     if(argc < 2) argv[1] = "192.168.1.73";
     sockaddr_in server_address{};
     int client_sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
@@ -54,6 +54,7 @@ int main(int argc,  char* argv[]) {
     server_address.sin_family = AF_INET;
     server_address.sin_port = htons(SERVER_PORT);
     server_address.sin_addr.s_addr = inet_addr(argv[1]);
+
 
     std::string in_str;
     std::string received;
@@ -117,7 +118,8 @@ int main(int argc,  char* argv[]) {
         } else {
             to_send = TXT_PREFIX + in_str + MESSAGE_END;
         }
-        send_to_server(server_address, client_sock, to_send);
+        auto &&send_code = send_to_server(server_address, client_sock, to_send);
+        if (send_code < 0) break;
         std::cout << "Sent: " << in_str << std::endl;
         auto &&receive_code = receive_from_server(server_address, client_sock, received);
         if (receive_code < 0) break;
@@ -127,47 +129,83 @@ int main(int argc,  char* argv[]) {
     close(client_sock);
 }
 
-void send_to_server(sockaddr_in &server_addr, int socket, std::string &message) {
-    std::cout << "Sending " << message << std::endl;
+int send_to_server(sockaddr_in &server_addr, int socket, std::string &message) {
     std::vector<std::string> send_buffer;
-    auto size = message.size() / UDP_PACKET_SIZE + 1;
-    for (auto i = 0, j = 0; i < size; i += UDP_PACKET_SIZE, ++j) {
-        std::string chunk = message.substr(i, UDP_PACKET_SIZE);
-        auto packet = make_content_message(j, size, chunk);
+    auto mess_size = message.size();
+    int size = mess_size / UDP_PACKET_SIZE;
+    int reminder = mess_size % UDP_PACKET_SIZE;
+    if(reminder > 0) ++size;
+    for (auto i = 0; i < size; ++i) {
+        auto chunk = message.substr(i * UDP_PACKET_SIZE, UDP_PACKET_SIZE);
+        auto packet = make_content_message(i, size, chunk);
         send_buffer.emplace_back(packet);
     }
     auto _server_addr = reinterpret_cast<sockaddr *>(&server_addr);
     for (auto &&packet: send_buffer) {
-        auto &&send_stat = sendto(socket, packet.data(), packet.size(), 0, _server_addr, sizeof(sockaddr));
+        auto &&send_stat = send_udp(socket, packet, _server_addr);
     }
+//    for (int l = 0; l < send_buffer.size(); ++l) {
+//        if(l == 0) continue;
+//        auto&& packet = send_buffer[l];
+//        auto &&send_stat = send_udp(socket, packet, _server_addr);
+//    }
+//    for (int l = 0; l < send_buffer.size(); ++l) {
+//        auto&& packet = send_buffer[l];
+//        auto &&send_stat = send_udp(socket, packet, _server_addr);
+//        if(l == 1) {
+//            auto &&send_stat = send_udp(socket, packet, _server_addr);
+//        }
+//    }
     char receive_buffer[MESSAGE_SIZE + 1];
     sockaddr client_info{};
     auto client_info_size = sizeof(sockaddr);
     auto client_info_size_ptr = reinterpret_cast<socklen_t *>(&client_info_size);
-    while (true) {
+    int send_index = 0;
+    fd_set rfds{};
+
+    int k;
+    for (k = 0; k < 100; ++k) {
         bzero(receive_buffer, MESSAGE_SIZE + 1);
-        auto bytes = recvfrom(socket, receive_buffer, MESSAGE_SIZE, 0, &client_info, client_info_size_ptr);
-        auto address = reinterpret_cast<sockaddr_in *>(&client_info);
-        if (address->sin_addr.s_addr != server_addr.sin_addr.s_addr) continue;
-        if (bytes < 0) {
-            std::cerr << "Receive error" << std::endl;
-            continue;
+        FD_ZERO(&rfds);
+        FD_SET(socket, &rfds);
+        timeval tv{};
+        tv.tv_sec = 0;
+        tv.tv_usec = 300000;
+        auto select_status = select(socket + 1, &rfds, NULL, NULL, &tv);
+        if(select_status < 0) {
+            std::cerr << "Error in select" << std::endl;
+            break;
+        } else if (select_status) {
+            auto bytes = recvfrom(socket, receive_buffer, MESSAGE_SIZE, 0, &client_info, client_info_size_ptr);
+            auto address = reinterpret_cast<sockaddr_in *>(&client_info);
+            if (address->sin_addr.s_addr != server_addr.sin_addr.s_addr) continue;
+            if (bytes < 0) {
+                std::cerr << "Receive error" << std::endl;
+                continue;
+            }
+            if (bytes == 0) continue;
+            auto message_type = receive_buffer[0];
+            if (message_type == CONTENT_MESSAGE) continue;
+            if (message_type == CHUNK_SUCCESS_MESSAGE) {
+                int message_number = *(int *) (receive_buffer + 1);
+                if(message_number < send_index) continue;
+                if(message_number == send_index) {
+                    send_index++;
+                    if (send_index == send_buffer.size()) break;
+                    continue;
+                }
+            }
         }
-        if (bytes == 0) continue;
-        auto message_type = receive_buffer[0];
-        if (message_type == CONTENT_MESSAGE) continue;
-        if (message_type == CHUNK_REQUEST_MESSAGE) {
-            int message_number = *(int *) (receive_buffer + 1);
-            std::cout << message_number << std::endl;
-            auto packet = send_buffer.at(message_number);
-            auto &&send_stat = sendto(socket, packet.data(), packet.size(), 0, _server_addr, sizeof(sockaddr));
-            continue;
-        }
-        if (message_type == CHUNK_SUCCESS_MESSAGE) {
-            int message_number = *(int *) (receive_buffer + 1);
-            if (message_number == send_buffer.size()) break;
+        for (int i = send_index; i < send_buffer.size(); ++i) {
+            auto&& packet = send_buffer[i];
+            send_udp(socket, packet, _server_addr);
         }
     }
+    if(k == 100) {
+        std::cerr << "server unreachable" << std::endl;
+        return -1;
+    }
+    return 0;
 }
 
 int receive_from_server(sockaddr_in &server_addr, int socket, std::string &received) {
@@ -177,8 +215,17 @@ int receive_from_server(sockaddr_in &server_addr, int socket, std::string &recei
     auto client_info_size = sizeof(sockaddr);
     auto client_info_size_ptr = reinterpret_cast<socklen_t *>(&client_info_size);
     auto _server_addr = reinterpret_cast<sockaddr *>(&server_addr);
+    fd_set rfds{};
     while (true) {
         bzero(buffer, MESSAGE_SIZE + 1);
+        FD_ZERO(&rfds);
+        FD_SET(socket, &rfds);
+        timeval tv{};
+        tv.tv_sec = 0;
+        tv.tv_usec = 3000000;
+        auto select_status = select(socket + 1, &rfds, NULL, NULL, &tv);
+        if(select_status <= 0)
+            return -2;
         auto bytes = recvfrom(socket, buffer, MESSAGE_SIZE, 0, &client_info, client_info_size_ptr);
         auto address = reinterpret_cast<sockaddr_in *>(&client_info);
         if (address->sin_addr.s_addr != server_addr.sin_addr.s_addr) continue;
@@ -188,23 +235,23 @@ int receive_from_server(sockaddr_in &server_addr, int socket, std::string &recei
         }
         if (bytes == 0) continue;
         auto message_type = buffer[0];
-        if (message_type == CHUNK_REQUEST_MESSAGE || message_type == CHUNK_SUCCESS_MESSAGE) continue;
+        if (message_type == CHUNK_SUCCESS_MESSAGE) continue;
         if (message_type == CONTENT_MESSAGE) {
             auto expected_chunk = receive_buffer.size();
             int message_number;
             int message_total;
             std::string message;
             std::tie(message_number, message_total, message) = parse_content_message(buffer, bytes);
-            if(message_number < expected_chunk) continue;
-            if(message_number > expected_chunk){
-                auto packet = make_chunk_request_packet(expected_chunk);
-                auto &&send_stat = sendto(socket, packet.data(), packet.size(), 0, _server_addr, sizeof(sockaddr));
-                continue;
+            if(message_number <= expected_chunk) {
+                auto packet = make_chunk_success_packet(message_number);
+                auto &&send_stat = send_udp(socket, packet, _server_addr);
             }
-            receive_buffer.emplace_back(message);
+            if(message_number == expected_chunk) {
+                receive_buffer.emplace_back(message);
+            }
             if(receive_buffer.size() == message_total){
                 auto packet = make_chunk_success_packet(message_total);
-                auto &&send_stat = sendto(socket, packet.data(), packet.size(), 0, _server_addr, sizeof(sockaddr));
+                auto &&send_stat = send_udp(socket, packet, _server_addr);
                 break;
             }
         }
