@@ -250,13 +250,19 @@ void server::Server::send_chunk(sockaddr_in& client_addr, std::string_view messa
     }
 }
 
+int drop = 0;
 
 void server::Server::client_message_chunk(int64_t client_id, int chunk_number, int total, std::string &message) {
     std::vector<std::string>* recv_buffer = &clients[client_id].receive_buffer;
     auto expected_message = recv_buffer->size();
     if(chunk_number <= expected_message) {
+        if(drop && chunk_number == 1) {
+            drop = 0;
+            return;
+        }
         auto packet = make_chunk_success_packet(chunk_number);
         send_chunk(client_id, packet);
+
     }
     if(chunk_number == 0){
         recv_buffer->clear();

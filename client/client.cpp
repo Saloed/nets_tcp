@@ -141,14 +141,14 @@ int send_to_server(sockaddr_in &server_addr, int socket, std::string &message) {
         send_buffer.emplace_back(packet);
     }
     auto _server_addr = reinterpret_cast<sockaddr *>(&server_addr);
-    for (auto &&packet: send_buffer) {
-        auto &&send_stat = send_udp(socket, packet, _server_addr);
-    }
-//    for (int l = 0; l < send_buffer.size(); ++l) {
-//        if(l == 0) continue;
-//        auto&& packet = send_buffer[l];
+//    for (auto &&packet: send_buffer) {
 //        auto &&send_stat = send_udp(socket, packet, _server_addr);
 //    }
+    for (int l = 0; l < send_buffer.size(); ++l) {
+        if(l == 0) continue;
+        auto&& packet = send_buffer[l];
+        auto &&send_stat = send_udp(socket, packet, _server_addr);
+    }
 //    for (int l = 0; l < send_buffer.size(); ++l) {
 //        auto&& packet = send_buffer[l];
 //        auto &&send_stat = send_udp(socket, packet, _server_addr);
